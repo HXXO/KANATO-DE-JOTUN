@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0d0a06">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Kanato de Jotun · Crónicas de Vhalor</title>
+<style>
+  /* ============================================================
+     RESET Y VARIABLES
+  ============================================================ */
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;overflow:hidden;overscroll-behavior:none;
+    -webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none;
+    -webkit-touch-callout:none;touch-action:none}
+  body{
+    font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif;
+    background:#0d0a06;color:#efe3c8;
+    font-size:14px;line-height:1.4;
+  }
+  button,input,select,textarea{font-family:inherit;font-size:inherit;color:inherit}
+  button{cursor:pointer;border:none;background:none}
+  :root{
+    --gold:#d9a441; --gold-d:#8a6d3b; --gold-l:#f3cf7a;
+    --bg:#0d0a06; --bg2:#1a140b; --panel:#1f1810;
+    --ink:#efe3c8; --ink-d:#b3a482;
+    --good:#3fbf6f; --bad:#c0392b; --warn:#e07030;
+    --hp:#c0392b; --st:#e0a030; --food:#7aa844;
+  }
+
+  /* ============================================================
+     CANVAS PRINCIPAL + MINIMAPA
+  ============================================================ */
+  #game{position:fixed;inset:0;width:100vw;height:100vh;display:block;
+    background:#0a0d08;image-rendering:pixelated;touch-action:none}
+
+  /* ============================================================
+     PANTALLAS (title, create, loading, pause, ko, error)
+  ============================================================ */
+  .screen{position:fixed;inset:0;display:none;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at center,#1a140b 0%,#0d0a06 80%);
+    z-index:100;padding:16px;overflow-y:auto}
+  .screen.active{display:flex}
+  .screen-card{background:linear-gradient(180deg,#1f1810,#15100a);
+    border:2px solid var(--gold-d);border-radius:14px;padding:26px 28px;
+    max-width:520px;width:100%;max-height:94vh;overflow-y:auto;
+    box-shadow:0 10px 40px #000c, 0 0 0 1px #000, inset 0 1px 0 #ffffff12}
+  .screen-card h1{font-size:28px;color:var(--gold-l);text-align:center;
+    margin-bottom:4px;letter-spacing:1px;
+    text-shadow:0 2px 8px #000c, 0 0 22px #d9a44155}
+  .screen-card h2{font-size:16px;color:var(--ink-d);text-align:center;
+    margin-bottom:18px;font-weight:normal;font-style:italic}
+  .screen-card h3{font-size:15px;color:var(--gold);margin:14px 0 8px;
+    border-bottom:1px solid #8a6d3b44;padding-bottom:4px}
+  .screen-card p{color:var(--ink-d);margin-bottom:10px;font-size:13px}
+  .screen-card .muted{color:#8a7a5a;font-size:12px;font-style:italic}
+  .screen-card .row{display:flex;gap:10px;align-items:center;
+    padding:8px 0;border-bottom:1px solid #8a6d3b22}
+  .screen-card .row:last-child{border-bottom:none}
+  .title-sub{text-align:center;color:var(--ink-d);font-size:12px;
+    margin-top:6px;font-style:italic}
+
+  /* Loading */
+  #load-bar{width:100%;height:14px;background:#000a;border:1px solid var(--gold-d);
+    border-radius:8px;overflow:hidden;margin:14px 0 8px}
+  #load-bar-fill{height:100%;width:4%;background:linear-gradient(90deg,#8a6d3b,#f3cf7a);
+    transition:width .25s ease}
+  #load-status{text-align:center;font-size:12px;color:var(--gold-l);min-height:18px}
+  #load-tip{text-align:center;font-size:11px;color:var(--ink-d);margin-top:12px;
+    font-style:italic;min-height:28px}
+
+  /* Title */
+  .title-art{text-align:center;font-size:54px;margin-bottom:6px;
+    text-shadow:0 0 24px #d9a44166}
+  .title-chains{display:flex;justify-content:center;gap:8px;margin-bottom:18px;font-size:24px;opacity:.7}
+
+  /* Create */
+  .field{margin-bottom:12px}
+  .field label{display:block;font-size:12px;color:var(--gold);margin-bottom:4px;
+    letter-spacing:.5px;text-transform:uppercase}
+  .field input[type="text"],.field input[type="number"],.field input[type="password"]{
+    width:100%;background:#0008;border:1px solid var(--gold-d);color:var(--ink);
+    padding:9px 12px;border-radius:7px;font-size:14px;outline:none}
+  .field input:focus{border-color:var(--gold);box-shadow:0 0 0 2px #d9a44133}
+  .gender-row{display:flex;gap:8px}
+  .gender-row button{flex:1;padding:10px;border:1px solid var(--gold-d);
+    background:#0008;border-radius:7px;font-size:14px;color:var(--ink);
+    transition:all .15s}
+  .gender-row button.sel{background:linear-gradient(180deg,#8a6d3b,#5a4520);
+    border-color:var(--gold-l);color:var(--gold-l)}
+  .err{color:#f28a7a;font-size:12px;min-height:16px;margin-top:4px}
+
+  /* KO */
+  #screen-ko .screen-card{border-color:var(--bad)}
+  #screen-ko h1{color:#f2b6a8}
+  #ko-text{font-size:13px;color:var(--ink-d);margin:10px 0 16px;min-height:48px}
+
+  /* Error */
+  #screen-error .screen-card{border-color:var(--warn);max-width:620px}
+  #error-text{white-space:pre-wrap;font-family:ui-monospace,Consolas,monospace;
+    font-size:11.5px;background:#000a;padding:10px;border-radius:6px;
+    max-height:200px;overflow:auto;color:#f2c1ba;border:1px solid #c0392b44}
+
+  /* ============================================================
+     BOTONES
+  ============================================================ */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+    padding:10px 16px;background:linear-gradient(180deg,#5a4520,#3a2a14);
+    color:var(--ink);border:1px solid var(--gold-d);border-radius:8px;
+    font-size:13px;transition:all .12s;min-height:38px;text-align:center;
+    box-shadow:0 2px 0 #0008, inset 0 1px 0 #ffffff12}
+  .btn:hover:not(:disabled){filter:brightness(1.2);transform:translateY(-1px)}
+  .btn:active:not(:disabled){transform:translateY(1px);box-shadow:inset 0 2px 4px #000a}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.primary{background:linear-gradient(180deg,#8a6d3b,#5a4520);
+    border-color:var(--gold);color:var(--gold-l)}
+  .btn.danger{background:linear-gradient(180deg,#8a3a2a,#5a2018);
+    border-color:#c0392b;color:#f2b6a8}
+  .btn.small{padding:6px 10px;font-size:11.5px;min-height:28px}
+  .btn-wide{width:100%;margin-top:8px}
+  .btn-group{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:12px}
+
+  /* ============================================================
+     HUD (grupos movibles: el editor de controles los coloca en %)
+  ============================================================ */
+  [hidden]{display:none!important}
+  #hud{position:fixed;inset:0;pointer-events:none;z-index:15}
+  .hg{position:absolute;pointer-events:none;left:50%;top:50%;transform:translate(-50%,-50%)}
+  .hg>.hz{transform:scale(var(--ctl-scale,1));transform-origin:center center}
+  .hud-tl{left:12%;top:9%}.hud-tc{left:50%;top:7%}.hud-tr{left:90%;top:12%}
+  .hud-bl{left:14%;top:74%}.hud-br{left:86%;top:74%}.hud-bc{left:50%;top:90%}
+  body.ctl-edit .hg{pointer-events:auto}
+  body.ctl-edit .hg *{pointer-events:none}
+
+  /* Estado (arriba izquierda) */
+  .hud-tl .hz{display:flex;flex-direction:column;gap:3px;width:158px}
+  .prow{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  #hud-name{font-size:13px;color:var(--gold-l);font-weight:bold;text-shadow:0 1px 2px #000}
+  #hud-collar{color:#8a8a92;font-size:12px}
+  #hud-title{font-size:10px;color:var(--ink-d);font-style:italic;margin-bottom:1px}
+  .bar{position:relative;height:11px;background:#000a;border:1px solid #8a6d3b88;border-radius:6px;overflow:hidden}
+  .bar-fill{height:100%;transition:width .2s ease}
+  .bar-hp .bar-fill{background:linear-gradient(90deg,#7a1a10,#e04b3a)}
+  .bar-st .bar-fill{background:linear-gradient(90deg,#8a6420,#f3cf7a)}
+  .bar-food .bar-fill{background:linear-gradient(90deg,#3a6a20,#7aa844)}
+  .bar-mount .bar-fill{background:linear-gradient(90deg,#3a6a8a,#5aa7e0)}
+  .bar-val{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    font-size:9px;color:#fff;text-shadow:0 1px 2px #000;font-weight:bold}
+  #hud-gold{font-size:12px;color:var(--gold-l);font-weight:bold;text-shadow:0 1px 2px #000}
+  #hud-level{font-size:11px;color:var(--gold-l);pointer-events:auto}
+  #ammo-badge{font-size:11px;color:var(--ink);background:#000a;border:1px solid var(--gold-d);border-radius:8px;padding:1px 6px;pointer-events:auto}
+  #debt-wrap{font-size:10px;color:#a8a8b0}
+  #mount-name{font-size:11px;color:#8fd0f0;margin-bottom:2px}
+  #mount-wrap{margin-top:2px}
+
+  /* Menú superior horizontal */
+  .hud-tc .hz{display:flex}
+  #hud-menu{display:flex;flex-direction:row;gap:3px;pointer-events:auto}
+  .mbtn{width:32px;height:32px;background:#000a;border:1px solid var(--gold-d);border-radius:8px;
+    color:var(--ink);font-size:15px;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 2px 0 #0008;padding:0}
+  .mbtn:active{transform:translateY(1px);background:#8a6d3b44}
+
+  /* Mapa + reloj (arriba derecha) */
+  .hud-tr .hz{display:flex;flex-direction:column;align-items:center;gap:3px}
+  #hud-clock{background:#0008;border:1px solid var(--gold-d);border-radius:8px;padding:2px 8px;text-align:center;white-space:nowrap}
+  #clock-time{font-size:13px;color:var(--gold-l);font-weight:bold}
+  #clock-day{font-size:9px;color:var(--ink-d)}
+  #clock-icon,#clock-weather{font-size:12px;margin:0 2px}
+  #minimap{display:block;width:96px;height:96px;background:#0a0d08;border:2px solid var(--gold-d);border-radius:8px;
+    box-shadow:0 2px 10px #000a;image-rendering:pixelated}
+
+  /* Barra de jefe (solo visible con un jefe cerca) */
+  #boss-bar{position:absolute;top:56px;left:50%;transform:translateX(-50%);width:300px;max-width:70vw;
+    flex-direction:column;gap:3px;background:#000a;border:1px solid #c0392b;border-radius:8px;padding:5px 10px;display:flex}
+  #boss-name{font-size:12px;color:#f2b6a8;text-align:center;font-weight:bold}
+  #boss-bar .bar{height:8px;border-color:#c0392b88}
+  #boss-bar .bar-fill{background:linear-gradient(90deg,#7a1a10,#e04b3a)}
+
+  /* Viñeta de vida baja */
+  #fx-vignette{position:fixed;inset:0;pointer-events:none;z-index:14;box-shadow:inset 0 0 120px 30px transparent;transition:box-shadow .3s}
+  #fx-vignette.lowhp{box-shadow:inset 0 0 140px 40px #7a1a10aa;animation:pulse-hp 1.4s ease-in-out infinite}
+  @keyframes pulse-hp{50%{box-shadow:inset 0 0 160px 50px #c0392bcc}}
+
+  /* Joystick */
+  #joy-zone{position:relative;width:190px;height:190px;pointer-events:auto;touch-action:none}
+  #joy-base{position:absolute;left:50%;top:50%;width:120px;height:120px;margin:-60px 0 0 -60px;
+    background:radial-gradient(circle,#0008 30%,#0002 70%,transparent);border:2px solid #8a6d3b88;border-radius:50%;opacity:.6;transition:opacity .15s}
+  #joy-zone.active #joy-base{opacity:.95}
+  #joy-knob{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px 0 0 -28px;
+    background:radial-gradient(circle,#d9a441cc,#8a6d3b);border:2px solid #f3cf7a;border-radius:50%;
+    box-shadow:0 2px 6px #000a, inset 0 1px 0 #fff6}
+
+  /* Botones de acción */
+  #act-zone{display:grid;grid-template-columns:repeat(3,58px);grid-template-rows:repeat(2,58px);gap:6px;pointer-events:auto}
+  .abtn{width:58px;height:58px;background:radial-gradient(circle,#1f1810dd,#0d0a06dd);border:2px solid var(--gold-d);
+    border-radius:50%;color:var(--gold-l);font-size:20px;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:1px;box-shadow:0 2px 0 #0008, inset 0 1px 0 #ffffff12;position:relative;touch-action:none;padding:0}
+  .abtn .al{font-size:8.5px;color:var(--ink-d);font-weight:bold;line-height:1}
+  .abtn .ai{display:flex;align-items:center;justify-content:center}
+  .abtn.pressed{background:radial-gradient(circle,#8a6d3bcc,#5a4520cc);transform:scale(.94)}
+  .abtn.dim{opacity:.4}
+  .abtn.on{background:radial-gradient(circle,#7aa844cc,#3a6a20cc);border-color:#8fe08f}
+  .abtn.noshield{opacity:.55}
+  #btn-roll{grid-column:1;grid-row:1}#btn-interact{grid-column:2;grid-row:1}#btn-attack{grid-column:3;grid-row:1}
+  #btn-sprint{grid-column:1;grid-row:2}#btn-mount{grid-column:2;grid-row:2}#btn-block{grid-column:3;grid-row:2}
+  #cd-attack{position:absolute;inset:-2px;border-radius:50%;background:conic-gradient(#000a calc(var(--cd,0) * 1%),transparent 0);pointer-events:none}
+
+  /* Barra rápida + pista */
+  .hud-bc .hz{display:flex;flex-direction:column;align-items:center;gap:4px}
+  #hint{background:#000a;border:1px solid var(--gold-d);border-radius:8px;padding:3px 10px;font-size:11px;color:var(--gold-l);white-space:nowrap;min-height:20px}
+  #quickbar{display:flex;gap:4px;pointer-events:auto}
+  .qslot{width:40px;height:40px;background:#000a;border:1px solid var(--gold-d);border-radius:7px;position:relative;
+    display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--ink);box-shadow:inset 0 1px 0 #ffffff12}
+  .qslot.empty{opacity:.45}
+  .qslot.flash{animation:qflash .4s ease}
+  @keyframes qflash{0%{box-shadow:0 0 0 0 #f3cf7a}50%{box-shadow:0 0 0 6px #f3cf7a88}100%{box-shadow:0 0 0 0 #f3cf7a00}}
+  .qslot .qcount{position:absolute;bottom:1px;right:3px;font-size:10px;color:var(--gold-l);font-weight:bold;text-shadow:0 1px 2px #000}
+  .qslot::before{content:attr(data-num);position:absolute;top:1px;left:3px;font-size:9px;color:#8a7a5a}
+
+  /* ============================================================
+     DIÁLOGO
+  ============================================================ */
+  #dialog{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);
+    width:92%;max-width:640px;background:linear-gradient(180deg,#1f1810ee,#15100aee);
+    border:2px solid var(--gold-d);border-radius:12px;padding:12px 14px;
+    z-index:40;box-shadow:0 6px 24px #000c, 0 0 0 1px #000;pointer-events:auto}
+  #dlg-head{display:flex;gap:10px;margin-bottom:8px;align-items:center}
+  #dlg-portrait{font-size:32px;filter:drop-shadow(0 2px 4px #000a)}
+  #dlg-name-wrap{flex:1}
+  #dlg-name{font-size:14px;color:var(--gold-l);font-weight:bold}
+  #dlg-trust{height:5px;background:#0008;border-radius:3px;overflow:hidden;margin-top:3px}
+  #dlg-trust-fill{height:100%;background:linear-gradient(90deg,#c0392b,#d9a441,#3fbf6f);
+    transition:width .3s}
+  #dlg-trust-label{font-size:10px;color:var(--ink-d);margin-top:2px}
+  #dlg-text{font-size:13.5px;color:var(--ink);min-height:42px;margin-bottom:10px;
+    line-height:1.5;padding:6px 4px}
+  #dlg-choices{display:flex;flex-direction:column;gap:5px}
+  .dlg-choice{width:100%;text-align:left;padding:8px 12px;background:#0008;
+    border:1px solid var(--gold-d);border-radius:7px;color:var(--ink);font-size:12.5px;
+    transition:all .12s}
+  .dlg-choice:hover{background:#8a6d3b44;border-color:var(--gold)}
+  .dlg-choice:active{transform:translateX(2px)}
+
+  /* ============================================================
+     MODAL (paneles: inventario, crafteo, tienda…)
+  ============================================================ */
+  #modal{position:fixed;inset:0;background:#000a;display:none;align-items:center;
+    justify-content:center;z-index:50;padding:14px;pointer-events:auto}
+  #modal:not([hidden]){display:flex}
+  #modal-card{background:linear-gradient(180deg,#1f1810,#15100a);
+    border:2px solid var(--gold-d);border-radius:12px;max-width:760px;width:100%;
+    max-height:92vh;display:flex;flex-direction:column;overflow:hidden;
+    box-shadow:0 10px 40px #000c}
+  #modal-head{display:flex;align-items:center;padding:10px 16px;
+    background:#0008;border-bottom:1px solid #8a6d3b44}
+  #modal-title{flex:1;font-size:16px;color:var(--gold-l);font-weight:bold}
+  #modal-close{width:32px;height:32px;font-size:18px;color:var(--ink-d);
+    border-radius:50%;display:flex;align-items:center;justify-content:center}
+  #modal-close:hover{background:#8a6d3b44;color:var(--ink)}
+  #modal-body{flex:1;overflow-y:auto;padding:14px 18px;font-size:13px;color:var(--ink)}
+  #modal-body h3{font-size:14px;color:var(--gold);margin:14px 0 8px;
+    border-bottom:1px solid #8a6d3b44;padding-bottom:3px}
+  #modal-body h4{font-size:13px;color:var(--gold-l);margin:8px 0 4px}
+  #modal-body p{margin-bottom:8px;color:var(--ink-d);font-size:12.5px}
+  #modal-body .muted{color:#8a7a5a;font-style:italic;font-size:12px}
+
+  /* Filas dentro del modal (listas de ítems, NPCs…) */
+  .row{display:grid;grid-template-columns:42px 1fr auto;gap:10px;align-items:center;
+    padding:8px 4px;border-bottom:1px solid #8a6d3b22}
+  .row:last-child{border-bottom:none}
+  .row .ric{font-size:26px;text-align:center}
+  .row .rmain{min-width:0}
+  .row .rname{font-size:13px;color:var(--ink);font-weight:bold;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .rsub{font-size:11px;color:var(--ink-d);margin-top:2px}
+  .row .ractions{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+  .price{color:var(--gold-l);font-weight:bold;font-size:12px}
+
+  /* Tabs */
+  .tabs{display:flex;gap:3px;margin:10px 0 12px;border-bottom:1px solid #8a6d3b44}
+  .tab{padding:7px 12px;font-size:12px;color:var(--ink-d);border-bottom:2px solid transparent;
+    transition:all .12s;background:none}
+  .tab:hover{color:var(--ink)}
+  .tab.on{color:var(--gold-l);border-bottom-color:var(--gold)}
+
+  /* Inventario: grid de slots */
+  .grid-inv{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));
+    gap:4px;margin-bottom:12px}
+  .islot{aspect-ratio:1;background:#0008;border:1px solid #8a6d3b55;border-radius:6px;
+    font-size:22px;display:flex;align-items:center;justify-content:center;position:relative;
+    color:var(--ink);transition:all .1s}
+  .islot:hover:not(:disabled){border-color:var(--gold);background:#8a6d3b22}
+  .islot.sel{border-color:var(--gold-l);background:#d9a44133;box-shadow:0 0 0 2px #f3cf7a44}
+  .islot .n{position:absolute;bottom:1px;right:3px;font-size:10px;font-weight:bold;
+    color:var(--gold-l);text-shadow:0 1px 2px #000}
+  .islot .dur{position:absolute;left:2px;right:2px;bottom:2px;height:3px;
+    background:#000a;border-radius:2px;overflow:hidden}
+  .islot .dur i{display:block;height:100%;background:linear-gradient(90deg,#c0392b,#e0a030,#3fbf6f)}
+
+  /* Checkboxes y radios estilizados */
+  .check{display:flex;align-items:center;gap:8px;padding:6px 0;cursor:pointer;font-size:12.5px}
+  .check input{width:16px;height:16px;accent-color:var(--gold)}
+  input[type="range"]{width:100%;accent-color:var(--gold)}
+  select{background:#000a;border:1px solid var(--gold-d);color:var(--ink);
+    padding:5px 8px;border-radius:5px;font-size:12px}
+
+  /* ============================================================
+     TOASTS Y BANNER
+  ============================================================ */
+  #toasts{position:fixed;top:70px;right:10px;display:flex;flex-direction:column;
+    gap:5px;z-index:30;pointer-events:none;max-width:300px}
+  .toast{background:#1f1810ee;border:1px solid var(--gold-d);border-radius:8px;
+    padding:8px 12px;font-size:12px;color:var(--ink);
+    box-shadow:0 4px 12px #000a;animation:tin .25s ease}
+  .toast.good{border-color:var(--good);color:#bfe9cd}
+  .toast.bad{border-color:var(--bad);color:#f2c1ba}
+  .toast.gold{border-color:var(--gold);color:var(--gold-l)}
+  .toast.out{opacity:0;transform:translateX(20px);transition:all .3s}
+  @keyframes tin{from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:translateX(0)}}
+
+  #banner{position:fixed;top:26%;left:50%;transform:translate(-50%,-50%) scale(.9);
+    background:linear-gradient(180deg,#d9a441ee,#8a6d3bee);border:2px solid #f3cf7a;
+    border-radius:12px;padding:16px 28px;text-align:center;opacity:0;pointer-events:none;
+    transition:all .4s cubic-bezier(.34,1.56,.64,1);z-index:60;min-width:260px;
+    box-shadow:0 10px 30px #000c, 0 0 40px #d9a44144}
+  #banner.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+  #banner-title{font-size:20px;color:#1a140b;font-weight:bold;letter-spacing:1px;
+    text-shadow:0 1px 0 #f3cf7a88}
+  #banner-sub{font-size:12px;color:#1a140b;margin-top:4px;font-style:italic}
+
+  /* ============================================================
+     DEBUG (F3)
+  ============================================================ */
+  #debug{position:fixed;top:10px;left:10px;background:#000c;border:1px solid #8a6d3b55;
+    border-radius:6px;padding:6px 10px;font-family:ui-monospace,Consolas,monospace;
+    font-size:10.5px;color:#bfe9cd;white-space:pre;z-index:1000;pointer-events:none;
+    line-height:1.5}
+
+  /* ============================================================
+     OVERLAY ORIENTACIÓN
+  ============================================================ */
+  #rotate-overlay{position:fixed;inset:0;background:#0d0a06;display:none;
+    align-items:center;justify-content:center;flex-direction:column;gap:16px;
+    z-index:9999;color:var(--gold-l);text-align:center;padding:20px}
+  #rotate-overlay .ico{font-size:64px;animation:rot 2s ease-in-out infinite}
+  @keyframes rot{0%,100%{transform:rotate(0)}50%{transform:rotate(90deg)}}
+  @media (orientation:portrait) and (max-width:900px){
+    #rotate-overlay{display:flex}
+  }
+
+  @media (max-width:560px){.hud-tl .hz{width:140px}#hud-name{font-size:12px}}
+
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     CANVAS PRINCIPAL + MINIMAPA
+============================================================ -->
+<canvas id="game"></canvas>
+
+<!-- ============================================================
+     HUD INGAME
+============================================================ -->
+<div id="hud" hidden>
+  <!-- Estado -->
+  <div id="hud-tl" class="hg hud-tl"><div class="hz">
+    <div class="prow"><span id="hud-collar" hidden></span><div id="hud-name"></div></div>
+    <div id="hud-title"></div>
+    <div class="bar bar-hp"><div id="bar-hp-fill" class="bar-fill" style="width:100%"></div><div class="bar-val"><span id="val-hp">100/100</span></div></div>
+    <div class="bar bar-st"><div id="bar-st-fill" class="bar-fill" style="width:100%"></div><div class="bar-val"><span id="val-st">100/100</span></div></div>
+    <div class="bar bar-food"><div id="bar-food-fill" class="bar-fill" style="width:100%"></div><div class="bar-val"><span id="val-food">100/100</span></div></div>
+    <div class="prow"><div id="hud-gold">0</div><div id="hud-level"></div><div id="ammo-badge" hidden></div></div>
+    <div id="debt-wrap">Deuda: <span id="hud-debt">2.000</span></div>
+    <div id="mount-wrap" hidden>
+      <div id="mount-name"></div>
+      <div class="bar bar-mount"><div id="bar-mount-fill" class="bar-fill" style="width:100%"></div></div>
+    </div>
+  </div></div>
+
+  <!-- Menú superior horizontal -->
+  <div id="hud-tc" class="hg hud-tc"><div class="hz">
+    <div id="hud-menu">
+      <button class="mbtn" id="btn-inv" title="Inventario (I)" aria-label="Inventario" data-ic="ui:bag" data-ic-size="17">🎒</button>
+      <button class="mbtn" id="btn-craft" title="Crafteo (C)" aria-label="Crafteo" data-ic="ui:craft" data-ic-size="17">🔨</button>
+      <button class="mbtn" id="btn-map" title="Mapa (M)" aria-label="Mapa" data-ic="ui:map" data-ic-size="17">🗺️</button>
+      <button class="mbtn" id="btn-social" title="Relaciones (R)" aria-label="Relaciones" data-ic="ui:social" data-ic-size="17">👥</button>
+      <button class="mbtn" id="btn-skills" title="Habilidades (H)" aria-label="Habilidades" data-ic="ui:level" data-ic-size="17">⭐</button>
+      <button class="mbtn" id="btn-settings" title="Ajustes" aria-label="Ajustes" data-ic="ui:settings" data-ic-size="17">⚙️</button>
+      <button class="mbtn" id="btn-pause" title="Pausa (Esc)" aria-label="Pausa" data-ic="ui:pause" data-ic-size="17">⏸️</button>
+    </div>
+  </div></div>
+
+  <!-- Mapa y reloj -->
+  <div id="hud-tr" class="hg hud-tr"><div class="hz">
+    <div id="hud-clock">
+      <div><span id="clock-icon"></span><span id="clock-time">06:00</span><span id="clock-weather"></span></div>
+      <div id="clock-day">Día 1</div>
+    </div>
+    <canvas id="minimap" width="280" height="280"></canvas>
+  </div></div>
+
+  <!-- Barra de jefe -->
+  <div id="boss-bar" hidden>
+    <div id="boss-name">???</div>
+    <div class="bar"><div id="boss-fill" class="bar-fill" style="width:100%"></div></div>
+  </div>
+
+  <div id="fx-vignette"></div>
+
+  <!-- Movimiento -->
+  <div id="hud-bl" class="hg hud-bl"><div class="hz">
+    <div id="joy-zone"><div id="joy-base"></div><div id="joy-knob"></div></div>
+  </div></div>
+
+  <!-- Acciones -->
+  <div id="hud-br" class="hg hud-br"><div class="hz">
+    <div id="act-zone">
+      <button class="abtn" id="btn-roll" aria-label="Rodar"><span class="ai" data-ic="ui:roll" data-ic-size="22">↷</span><span class="al">Rodar</span></button>
+      <button class="abtn" id="btn-interact" aria-label="Interactuar"><span class="ai" data-ic="ui:interact" data-ic-size="22">✋</span><span class="al" id="interact-label">Usar</span></button>
+      <button class="abtn" id="btn-attack" aria-label="Atacar"><span class="ai" data-ic="ui:attack" data-ic-size="22">⚔</span><span class="al">Atacar</span><div id="cd-attack"></div></button>
+      <button class="abtn" id="btn-sprint" aria-label="Correr"><span class="ai" data-ic="ui:sprint" data-ic-size="22">»</span><span class="al">Correr</span></button>
+      <button class="abtn" id="btn-mount" aria-label="Montar"><span class="ai" data-ic="ui:mount" data-ic-size="22">🐎</span><span class="al">Montar</span></button>
+      <button class="abtn" id="btn-block" aria-label="Bloquear"><span class="ai" data-ic="ui:block" data-ic-size="22">🛡</span><span class="al">Guardia</span></button>
+    </div>
+  </div></div>
+
+  <!-- Barra rápida -->
+  <div id="hud-bc" class="hg hud-bc"><div class="hz">
+    <div id="hint" hidden>Interactuar</div>
+    <div id="quickbar">
+      <div class="qslot empty" data-num="1"><span class="qicon"></span><span class="qcount"></span></div>
+      <div class="qslot empty" data-num="2"><span class="qicon"></span><span class="qcount"></span></div>
+      <div class="qslot empty" data-num="3"><span class="qicon"></span><span class="qcount"></span></div>
+      <div class="qslot empty" data-num="4"><span class="qicon"></span><span class="qcount"></span></div>
+      <div class="qslot empty" data-num="5"><span class="qicon"></span><span class="qcount"></span></div>
+    </div>
+  </div></div>
+</div>
+
+<!-- ============================================================
+     DIÁLOGO
+============================================================ -->
+<div id="dialog" hidden>
+  <div id="dlg-head">
+    <div id="dlg-portrait">👤</div>
+    <div id="dlg-name-wrap">
+      <div id="dlg-name">Aldeano</div>
+      <div id="dlg-trust"><div id="dlg-trust-fill" style="width:50%"></div></div>
+      <div id="dlg-trust-label">Neutral (0)</div>
+    </div>
+  </div>
+  <div id="dlg-text" class="tw"></div>
+  <div id="dlg-choices"></div>
+</div>
+
+<!-- ============================================================
+     MODAL
+============================================================ -->
+<div id="modal" hidden>
+  <div id="modal-card">
+    <div id="modal-head">
+      <div id="modal-title">Panel</div>
+      <button id="modal-close" aria-label="Cerrar">✕</button>
+    </div>
+    <div id="modal-body"></div>
+  </div>
+</div>
+
+<!-- ============================================================
+     TOASTS / BANNER / DEBUG
+============================================================ -->
+<div id="toasts"></div>
+<div id="banner"><div id="banner-title"></div><div id="banner-sub"></div></div>
+<div id="debug" hidden></div>
+
+<!-- ============================================================
+     PANTALLAS
+============================================================ -->
+<!-- Loading -->
+<div class="screen active" id="screen-loading">
+  <div class="screen-card">
+    <h1>⛓️ KANATO DE JOTUN</h1>
+    <h2>Crónicas de Vhalor</h2>
+    <div id="load-bar"><div id="load-bar-fill"></div></div>
+    <div id="load-status">Preparando el mundo…</div>
+    <div id="load-tip">💡 Consejos aparecerán aquí.</div>
+  </div>
+</div>
+
+<!-- Title -->
+<div class="screen" id="screen-title">
+  <div class="screen-card">
+    <div class="title-art">⛓️</div>
+    <h1>KANATO DE JOTUN</h1>
+    <div class="title-sub">De esclavo a señor de tus propias tierras</div>
+    <div class="title-chains">⛓️ ⛓️ ⛓️</div>
+    <div class="btn-group" style="flex-direction:column">
+      <button class="btn primary btn-wide" id="btn-new">⚔️ Nueva partida</button>
+      <button class="btn btn-wide" id="btn-continue">📜 Continuar</button>
+      <button class="btn btn-wide" id="btn-title-help">❓ Cómo jugar</button>
+    </div>
+    <div id="title-version" class="title-sub" style="margin-top:14px"></div>
+  </div>
+</div>
+
+<!-- Create -->
+<div class="screen" id="screen-create">
+  <div class="screen-card">
+    <h1>¿Quién rompe su cadena?</h1>
+    <div class="field">
+      <label>NOMBRE</label>
+      <input type="text" id="create-name" maxlength="16" placeholder="Ej: Ardan" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>GÉNERO</label>
+      <div class="gender-row">
+        <button id="gender-male" class="sel">♂ Hombre</button>
+        <button id="gender-female">♀ Mujer</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>SEMILLA DEL MUNDO (opcional)</label>
+      <input type="text" id="create-seed" placeholder="Deja vacío para aleatoria" autocomplete="off">
+    </div>
+    <div id="create-error" class="err"></div>
+    <div class="btn-group">
+      <button class="btn" id="btn-create-back">← Volver</button>
+      <button class="btn primary" id="btn-create-start">🌍 Comenzar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Pause -->
+<div class="screen" id="screen-pause">
+  <div class="screen-card">
+    <h1>⏸️ Pausa</h1>
+    <div class="btn-group" style="flex-direction:column">
+      <button class="btn primary btn-wide" id="btn-resume">▶️ Reanudar</button>
+      <button class="btn btn-wide" id="btn-save">💾 Guardar partida</button>
+      <button class="btn btn-wide" id="btn-pause-settings">⚙️ Ajustes</button>
+      <button class="btn btn-wide" id="btn-pause-help">❓ Cómo jugar</button>
+      <button class="btn danger btn-wide" id="btn-quit">🚪 Guardar y salir al título</button>
+    </div>
+  </div>
+</div>
+
+<!-- KO -->
+<div class="screen" id="screen-ko">
+  <div class="screen-card">
+    <h1>💀 Has caído…</h1>
+    <div id="ko-text">Los cazadores te arrastran de vuelta a Vhalor.</div>
+    <div class="btn-group">
+      <button class="btn primary" id="btn-ko-continue">🌅 Despertar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Error -->
+<div class="screen" id="screen-error">
+  <div class="screen-card">
+    <h1>⚠️ Error inesperado</h1>
+    <p class="muted">Exporta tu guardado antes de recargar.</p>
+    <pre id="error-text"></pre>
+    <div class="btn-group">
+      <button class="btn" id="btn-error-export">📤 Exportar guardado</button>
+      <button class="btn danger" id="btn-error-reload">🔄 Recargar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Overlay de orientación (solo se ve en portrait en móvil) -->
+<div id="rotate-overlay">
+  <div class="ico">📱</div>
+  <h1 style="font-size:20px;color:var(--gold-l)">Gira tu dispositivo</h1>
+  <p style="max-width:300px;color:var(--ink-d)">Kanato de Jotun se juega en horizontal para aprovechar el mapa isométrico y los controles.</p>
+</div>
+
+<!-- ============================================================
+     SCRIPTS (orden correcto: audio ANTES de systems)
+============================================================ -->
+<script>
+/* Cargador secuencial con diagnóstico: detecta archivos faltantes
+   o con sintaxis rota y muestra el error exacto en la pantalla. */
+(function () {
+  var FILES = [
+    'core.js', 'data.js', 'data-items.js', 'data-species.js', 'data-world.js',
+    'art.js', 'art-creatures.js', 'art-items.js', 'art-people.js',
+    'world.js', 'audio.js', 'entities.js',
+    'systems.js', 'render.js', 'ui.js', 'main.js'
+  ];
+  var CHECK = {
+    'core.js':     function () { return window.CR && CR.util; },
+    'data.js':     function () { return CR.DATA && CR.DATA.BAL; },
+    'data-items.js':   function () { return CR.DATA.RECIPES && CR.DATA.RECIPES.length; },
+    'data-species.js': function () { return CR.DATA.SPECIES && Object.keys(CR.DATA.SPECIES).length; },
+    'data-world.js':   function () { return CR.DATA.PARCEL_CLASSES; },
+    'art.js':      function () { return CR.Art && CR.Art.drawBody; },
+    'art-creatures.js': function () { return CR.Art; },
+    'art-items.js':     function () { return CR.Art; },
+    'art-people.js':    function () { return CR.Art; },
+    'world.js':    function () { return CR.World; },
+    'entities.js': function () { return CR.Ent; },
+    'audio.js':    function () { return CR.Audio; },
+    'systems.js':  function () { return CR.Sys; },
+    'render.js':   function () { return CR.Render; },
+    'ui.js':       function () { return CR.UI; },
+    'main.js':     function () { return CR.Game; }
+  };
+  var lastErr = '', i = 0;
+  window.addEventListener('error', function (e) {
+    if (e.target && e.target.tagName === 'SCRIPT') return;
+    lastErr = (e.filename ? e.filename.split('/').pop() + ' → ' : '') + (e.message || e);
+  }, true);
+  function fail(msg) {
+    var st = document.getElementById('load-status');
+    var card = document.querySelector('#screen-loading .screen-card');
+    if (st) st.textContent = msg;
+    if (card && lastErr) {
+      var tip = document.getElementById('load-tip');
+      if (tip) tip.innerHTML = '<span style="color:#f28a7a">Detalle: ' + lastErr + '</span>';
+    }
+    console.error('[CR] ' + msg, lastErr);
+  }
+  function next() {
+    if (i >= FILES.length) return;
+    var f = FILES[i++];
+    var s = document.createElement('script');
+    s.src = f;
+    s.onerror = function () {
+      fail('Falta el archivo "' + f + '" junto a index.htm (o está mal nombrado).');
+    };
+    s.onload = function () {
+      var ok = true;
+      try { ok = !!CHECK[f](); } catch (e) { lastErr = String(e.message || e); ok = false; }
+      if (!ok) {
+        fail(f + ' se cargó pero falló internamente (sintaxis o excepción al pegar).');
+        return;
+      }
+      next();
+    };
+    document.body.appendChild(s);
+  }
+  next();
+})();
+</script>
+
+</body>
+</html>
