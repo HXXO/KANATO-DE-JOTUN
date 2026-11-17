@@ -229,7 +229,7 @@ const STATIONS = ['hand', 'campfire', 'kitchen', 'mill', 'smelter', 'forge',
                   'anvil', 'workbench', 'fletching', 'tannery', 'loom', 'alchemy'];
 const STATION_INFO = {
   hand:      { name: 'A mano',            glyph: 'interact', fuel: 0, building: null,        req: null,
-               desc: 'Solo lo más básico: atar fibras, encender fuego, vendas simples y comida cruda.' },
+               desc: 'Sin mesa ni nivel: pico, hacha y azada de piedra, caña y arco de madera, flechas caseras, cuerda, antorchas y vendas simples.' },
   campfire:  { name: 'Fogata',            glyph: 'fire',     fuel: 1, building: 'campfire',  req: null,
                desc: 'Asa carne y pescado, hierve agua. Consume leña.' },
   kitchen:   { name: 'Cocina',            glyph: 'food',     fuel: 1, building: 'kitchen',   req: { lv: 3, skill: { artisan: 1 } },

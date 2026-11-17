@@ -2,7 +2,8 @@
 KANATO DE JOTUN · data-items.js — Contenido v3 (parte 2 de 4)
 Registra todos los objetos y recetas sobre CR.DEF (data.js).
 Reglas de progresión:
- · A mano: solo atar, encender, vendar y sacar semillas.
+ · A mano: atar, encender, vendar, sacar semillas y el equipo de supervivencia
+   (pico, hacha, azada, caña y arco de madera/piedra, flechas caseras, aguja y piedra de afilar).
  · Cada estación desbloquea su familia de recetas.
  · Fundir metales requiere horno de fundición y mucho combustible.
  · Armas/armaduras avanzadas: forja + yunque.
@@ -143,7 +144,7 @@ R('leather', 1, [{ id: 'hide', n: 3 }], 'tannery', { req: { lv: 4, skill: { arti
 R('hard_leather', 1, [{ id: 'leather', n: 2 }, { id: 'beeswax', n: 1 }], 'tannery', { fuel: 1, req: { lv: 8, skill: { artisan: 3 } }, xp: 16 });
 R('straw', 2, [{ id: 'hay', n: 1 }], 'hand', { req: null, xp: 3 });
 I('needle', { name: 'Aguja de hueso', cat: 'tool', value: 12, stack: 1, tool: { kind: 'needle', dmg: 1, pow: 1, dur: 120, stam: 1 }, desc: 'Cose vendas y ropa fina.' });
-R('needle', 1, [{ id: 'bone', n: 1 }, { id: 'flint', n: 1 }], 'workbench', { req: { lv: 3 }, xp: 6 });
+R('needle', 1, [{ id: 'bone', n: 1 }, { id: 'flint', n: 1 }], 'hand', { req: null, xp: 6 });
 
 /* ==========================================================
 4 · MOLINO Y COCINA BASE
@@ -190,8 +191,9 @@ TIERS.forEach(function (t) {
     name: 'Azada ' + t.adj, cat: 'tool', value: Math.round(t.val * 0.7), stack: 1,
     tool: { kind: 'hoe', dmg: 2, pow: t.pow, dur: t.dur, stam: 4 }, desc: 'Ara la tierra de tus parcelas.'
   });
-  R('hoe_' + id, 1, [{ id: t.mat, n: 2 }, { id: 'wood', n: 2 }], id === 'stone' ? 'workbench' : 'forge',
-    { req: { lv: Math.max(2, t.lv - 1), skill: { artisan: 1 } }, fuel: id === 'stone' ? 0 : 1, skill: 'farming', xp: 10 });
+  /* Azada de piedra: a mano, sin mesa ni nivel (para no frenar la granja inicial). */
+  R('hoe_' + id, 1, [{ id: t.mat, n: 2 }, { id: 'wood', n: 2 }], id === 'stone' ? 'hand' : 'forge',
+    { req: id === 'stone' ? null : { lv: Math.max(2, t.lv - 1), skill: { artisan: 1 } }, fuel: id === 'stone' ? 0 : 1, skill: 'farming', xp: 10 });
 });
 /* Cañas */
 [['wood', 'de madera', 1, 80, 15, 2], ['iron', 'de hierro', 2, 160, 120, 6], ['mithril', 'de mithril', 3, 300, 420, 12]]
@@ -204,6 +206,8 @@ TIERS.forEach(function (t) {
     { req: { lv: r[5] }, skill: 'fishing', xp: 10 });
 });
 I('watering_can', { name: 'Regadera', cat: 'tool', value: 25, stack: 1, tool: { kind: 'water', dmg: 1, pow: 1, dur: 150, stam: 2 }, desc: 'Riega cultivos (+35 % crecimiento).' });
+/* Caña de madera a mano: cuerda en lugar de hilo (el telar llega en el nivel 4). */
+R('rod_wood', 1, [{ id: 'wood', n: 3 }, { id: 'rope', n: 1 }], 'hand', { id: 'r_rod_wood_hand', req: null, skill: 'fishing', xp: 8 });
 R('watering_can', 1, [{ id: 'copper_bar', n: 2 }, { id: 'wood', n: 2 }], 'workbench', { req: { lv: 3, skill: { artisan: 1 } }, xp: 9 });
 I('sickle', { name: 'Hoz', cat: 'tool', value: 60, stack: 1, tool: { kind: 'sickle', dmg: 5, pow: 2, dur: 180, stam: 2 }, desc: 'Cosecha 2×2 y rinde más semilla.' });
 R('sickle', 1, [{ id: 'iron_bar', n: 2 }, { id: 'wood', n: 1 }], 'forge', { req: { lv: 7, skill: { artisan: 2 } }, fuel: 1, skill: 'farming', xp: 12 });
@@ -212,7 +216,7 @@ R('hammer_build', 1, [{ id: 'iron_bar', n: 3 }, { id: 'wood', n: 2 }], 'forge', 
 I('repair_kit', { name: 'Kit de reparación', cat: 'misc', value: 70, desc: 'Restaura 40 % de durabilidad del arma y la herramienta equipadas.' });
 R('repair_kit', 1, [{ id: 'iron_bar', n: 1 }, { id: 'leather', n: 1 }, { id: 'oil', n: 1 }], 'workbench', { req: { lv: 6, skill: { artisan: 2 } }, xp: 12 });
 I('whetstone', { name: 'Piedra de afilar', cat: 'misc', value: 45, desc: '+15 % de daño durante un día.' });
-R('whetstone', 1, [{ id: 'flint', n: 2 }, { id: 'stone', n: 2 }], 'workbench', { req: { lv: 5 }, xp: 8 });
+R('whetstone', 1, [{ id: 'flint', n: 2 }, { id: 'stone', n: 2 }], 'hand', { req: null, xp: 8 });
 I('torch', { name: 'Antorcha', cat: 'tool', value: 8, stack: 1, tool: { kind: 'torch', dmg: 3, pow: 1, dur: 240, stam: 1 }, light: 110, desc: 'Ilumina la noche. Se consume con el tiempo.' });
 R('torch', 2, [{ id: 'wood', n: 1 }, { id: 'fiber', n: 1 }], 'hand', { req: null, xp: 3 });
 I('lantern', { name: 'Farol de aceite', cat: 'tool', value: 140, stack: 1, tool: { kind: 'lantern', dmg: 1, pow: 1, dur: 900, stam: 1 }, light: 170, desc: 'Luz estable y duradera. No se apaga con la lluvia.' });
@@ -290,8 +294,10 @@ BOWS.forEach(function (b) {
   });
   const ing = [];
   for (let i = 0; i < b[5].length; i += 2) ing.push({ id: b[5][i], n: b[5][i + 1] });
-  R(b[0], 1, ing, b[7] <= 2 ? 'workbench' : 'fletching',
-    { req: { lv: b[7], skill: { marks: b[8], artisan: Math.min(5, b[8] + 1) } }, skill: 'combat', xp: 18 });
+  /* Arco corto: a mano (madera + cuerda). Los demás arcos exigen mesa de flechas. */
+  const bowHand = b[0] === 'bow_wood';
+  R(b[0], 1, ing, bowHand ? 'hand' : 'fletching',
+    { req: bowHand ? null : { lv: b[7], skill: { marks: b[8], artisan: Math.min(5, b[8] + 1) } }, skill: 'combat', xp: 18 });
 });
 
 /* ==========================================================
@@ -319,6 +325,8 @@ ARROW_DEF.forEach(function (a) {
   for (let i = 0; i < a[4].length; i += 2) ing.push({ id: a[4][i], n: a[4][i + 1] });
   R(a[1], a[5], ing, 'fletching', { req: { lv: a[6], skill: { marks: a[7] } }, skill: 'combat', xp: 8 });
 });
+/* Flecha casera: a mano, con fibra en lugar de pluma. Menos cantidad que en la mesa de flechas. */
+R('arrow_basic', 3, [{ id: 'wood', n: 1 }, { id: 'flint', n: 1 }, { id: 'fiber', n: 1 }], 'hand', { id: 'r_arrow_basic_hand', req: null, skill: 'combat', xp: 4 });
 I('quiver', { name: 'Carcaj', cat: 'bag', value: 160, stack: 1, bag: { slots: 0, ammo: 60 }, desc: 'Guarda 60 flechas sin ocupar la mochila.' });
 R('quiver', 1, [{ id: 'leather', n: 3 }, { id: 'thread', n: 2 }], 'tannery', { req: { lv: 6, skill: { marks: 2, artisan: 2 } }, xp: 12 });
 

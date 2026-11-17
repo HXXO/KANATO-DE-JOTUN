@@ -1062,7 +1062,7 @@ function craftHTML() {
     const s = D.STATIONS[i], info = D.STATION_INFO[s];
     h += chip(uiimg(v.stations[s] ? 'check' : 'cross', 11) + '<span>' + esc(info.name) + '</span>', !!v.stations[s]);
   }
-  h += '</div><p class="muted">A mano solo lo básico. Cada estación se construye en tu parcela o la presta un mercader con recargo. Combustible: madera 1, carbón 4, carbón vegetal 6.</p>';
+  h += '</div><p class="muted">A mano puedes hacer el equipo básico (pico, hacha, azada, caña, arco y flechas caseras). Cada estación se construye en tu parcela o la presta un mercader con recargo. Combustible: madera 1, carbón 4, carbón vegetal 6.</p>';
   if (!UI._craftTab) UI._craftTab = 'all';
   const cats = [['all', 'Todo'], ['tool', 'Herramientas'], ['weapon', 'Armas'], ['ammo', 'Flechas'], ['shield', 'Escudos'], ['armor', 'Armaduras'], ['food', 'Comida'], ['heal', 'Curas'], ['misc', 'Otros']];
   h += '<div class="tabs">';
