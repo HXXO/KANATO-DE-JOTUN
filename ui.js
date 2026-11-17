@@ -1838,4 +1838,140 @@ function initModalHandlers() {
       case 'delete': S.deleteSave(); break;
       case 'quit': Bus.emit('ui:quit'); break;
       case 'help': panelToLocal('help'); break;
-      default: br
+      default: break;
+    }
+    UI.refreshQuickbar();
+  }, false, 'ui');
+  CR.Bindings.add(body, 'change', function (ev) {
+    const t = ev.target;
+    if (!t || !t.getAttribute) return;
+    if (t.getAttribute('data-act') === 'role') { S.setRole(parseInt(t.getAttribute('data-uid'), 10), t.value); return; }
+    if (t.getAttribute('data-set')) { CR.Settings.set(t.getAttribute('data-set'), !!t.checked); return; }
+  }, false, 'ui');
+  CR.Bindings.add(body, 'input', function (ev) {
+    if (ev.target.id === 'ui-vol') {
+      CR.Settings.set('volume', U.clamp(parseInt(ev.target.value, 10) / 100, 0, 1));
+      const lb = ev.target.parentNode.querySelector('label');
+      if (lb) lb.innerHTML = uiimg('sound_on', 12) + 'Volumen — ' + ev.target.value + '%';
+    } else if (ev.target.id === 'ui-aim') {
+      CR.Settings.set('aimAssist', U.clamp(parseInt(ev.target.value, 10) / 100, 0, 2));
+      const lb = ev.target.parentNode.querySelector('label');
+      if (lb) lb.innerHTML = uiimg('eye', 12) + 'Asistencia de apuntado — ' + ev.target.value + '%';
+    }
+  }, false, 'ui');
+  Bus.on('panel:open', function () { UI.local = null; UI._shopTab = 'buy'; UI.renderPanel(); }, 'ui');
+  Bus.on('panel:update', function () { refresh(); }, 'ui');
+  Bus.on('panel:close', function () { if (!UI.local) { const m = el('modal'); if (m) m.hidden = true; } UI.syncInput(); }, 'ui');
+  Bus.on('quick:update', function () { UI.refreshQuickbar(); }, 'ui');
+  Bus.on('loot', function () { UI.refreshQuickbar(); }, 'ui');
+  Bus.on('alloc', function () { if (UI.local === 'skills') UI.renderLocal(); }, 'ui');
+  Bus.on('globallevel', function () { if (UI.local === 'skills') UI.renderLocal(); }, 'ui');
+  Bus.on('help:progress', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
+  Bus.on('help:accepted', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
+  Bus.on('help:done', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
+}
+
+/* ==========================================================
+17 · APERTURAS RÁPIDAS
+========================================================== */
+UI.openBuild = function () {
+  if (!E.player || S.dialog || UI._portrait || UI._edit) return;
+  UI.local = null;
+  S.openPanel('build', {});
+};
+UI.openSkills = function () {
+  if (!E.player || S.dialog || UI._portrait || UI._edit) return;
+  UI.toggleLocal('skills');
+};
+
+/* ==========================================================
+18 · TICK
+========================================================== */
+UI.tick = function (dt) {
+  for (let i = UI._toasts.length - 1; i >= 0; i--) {
+    const t = UI._toasts[i];
+    t.t += dt;
+    if (t.t > t.life - 0.35) t.node.classList.add('out');
+    if (t.t >= t.life) {
+      if (t.node.parentNode) t.node.parentNode.removeChild(t.node);
+      UI._toasts.splice(i, 1);
+    }
+  }
+  if (UI._banner > 0) {
+    UI._banner -= dt;
+    if (UI._banner <= 0) { const b = el('banner'); if (b) b.classList.remove('show'); }
+  }
+  if (UI._type) {
+    const ty = UI._type;
+    ty.i += dt / ty.speed;
+    const n = Math.min(ty.full.length, Math.floor(ty.i));
+    ty.node.textContent = ty.full.slice(0, n);
+    if (n >= ty.full.length) UI._type = null;
+  }
+  const p = E.player;
+  if (p) {
+    const cd = el('cd-attack');
+    if (cd) {
+      const cdv = String(Math.round(U.clamp(p.cb.cd / B.ATTACK_CD, 0, 1) * 100));
+      if (cd._cd !== cdv) { cd._cd = cdv; cd.style.setProperty('--cd', cdv); }
+    }
+  }
+  UI._hudT -= dt;
+  if (UI._hudT <= 0) {
+    UI._hudT = 0.1;
+    const hud = el('hud');
+    if (p && hud && !hud.hidden) { UI.refreshHUD(); UI.refreshQuickbar(); }
+  }
+};
+
+/* ==========================================================
+19 · INIT / DISPOSE
+========================================================== */
+UI.init = function () {
+  registerGlyphs();
+  injectCSS();
+  hydrateIcons(document);
+  initJoystick();
+  initButtons();
+  initKeys();
+  initDialog();
+  initModalHandlers();
+  initCtlDrag();
+  initOrientation();
+  applyCtl();
+  Bus.on('toast', function (d) { if (d) UI.toast(d.msg, d.cls); }, 'ui');
+  Bus.on('banner', function (d) { if (d) UI.banner(d.title, d.sub); }, 'ui');
+  Bus.on('hint', function (h) { UI.setHint(h); }, 'ui');
+  Bus.on('loaded', function () { UI.refreshQuickbar(); UI.refreshHUD(); applyCtl(); }, 'ui');
+  Bus.on('settings', function (k) {
+    if (k === 'ctl') { applyCtl(); if (UI._edit) syncEditor(); }
+    if (k === 'showZones' && UI.local === 'map') drawBigMap();
+  }, 'ui');
+  Bus.on('ammo', function () { UI.refreshHUD(); }, 'ui');
+  Bus.on('equip', function () { UI.refreshHUD(); }, 'ui');
+
+  const tips = D.TIPS, tipNode = el('load-tip');
+  if (tipNode && tips.length) {
+    let ti = 0;
+    const paint = function () { tipNode.innerHTML = uiimg('info', 13) + '<span>' + esc(clean(tips[ti])) + '</span>'; };
+    paint();
+    UI._tipTimer = setInterval(function () { ti = (ti + 1) % tips.length; paint(); }, 3800);
+  }
+  const tv = el('title-version');
+  if (tv) tv.textContent = 'v' + CR.version + ' · ' + C.WORLD + '×' + C.WORLD + ' · ' + D.BIOMES.length + ' biomas · horizontal';
+  UI.ready = true;
+  console.info('[CR] ui.js v3 listo · HUD horizontal · editor de controles · ' +
+    '24 paneles · ' + D.HELP.length + ' secciones de ayuda · sin emojis');
+};
+UI.dispose = function () {
+  if (UI._tipTimer) clearInterval(UI._tipTimer);
+  UI._tipTimer = 0;
+  if (UI._orT) clearTimeout(UI._orT);
+  UI._orT = 0;
+  if (UI._editor && UI._editor.parentNode) UI._editor.parentNode.removeChild(UI._editor);
+  UI._editor = null;
+  CR.Bindings.removeOwner('ui');
+  UI._qs = null;
+  UI.ready = false;
+};
+})();

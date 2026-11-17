@@ -2260,4 +2260,1031 @@ function hostileTo(e, t) {
          t.tg.faction === 'bandit' || t.tg.faction === 'mythic')) return true;
     if (t.type === 'guard' && t.tg.angry) return true;
     if (t.species === 'bandit') return true;
-    
+    return false;
+  }
+  /* Guardia de la ciudad */
+  if (e.type === 'guard' || e.tg.guardian === 'city') {
+    if (t.type === 'player') return E.heat >= 40 || e.tg.angry;
+    if (t.species === 'bandit') return true;
+    if (t.type === 'creature' && !t.tg.tamed && !t.tg.livestock && !t.tg.mounted)
+      return W.isCity(Math.floor(t.t.x), Math.floor(t.t.y)) && (t.tg.hostile || t.tg.faction === 'predator');
+    return false;
+  }
+  /* Guardián de tus construcciones */
+  if (e.tg.guardian === 'player') {
+    if (t.species === 'bandit') return true;
+    return t.type === 'creature' && !t.tg.tamed &&
+           (t.tg.hostile || t.tg.faction === 'predator' || t.tg.faction === 'undead' || t.tg.faction === 'mythic');
+  }
+  /* Guardián de santuario: expulsa a quien entra */
+  if (e.tg.guardian === 'zone') {
+    if (t.type === 'player' || t.type === 'worker') return true;
+    if (t.tg.tamed && t.tg.owner === 'player') return true;
+    if (t.species === 'bandit') return true;
+    return false;
+  }
+  if (e.species === 'bandit')
+    return t.type === 'player' || t.type === 'worker' || t.type === 'guard' ||
+           (t.tg.tamed && t.type === 'creature');
+  if (e.tg.hostile || e.tg.faction === 'undead' || e.tg.faction === 'mythic')
+    return t.type === 'player' || t.type === 'worker' ||
+           (t.tg.tamed && t.type === 'creature') ||
+           (t.type === 'guard' && W.isCity(Math.floor(e.t.x), Math.floor(e.t.y)));
+  return false;
+}
+function findEnemy(e, radius) {
+  W.Hash.query(e.t.x, e.t.y, radius, E._q2);
+  let best = null, bd = radius * radius;
+  for (let i = 0; i < E._q2.length; i++) {
+    const t = E._q2[i];
+    if (!hostileTo(e, t)) continue;
+    if (!W.lineOfSight(e.t.x, e.t.y, t.t.x, t.t.y)) continue;
+    const d = U.dist2(e.t.x, e.t.y, t.t.x, t.t.y);
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+/** Presa ecológica: solo salvajes, nunca el ganado del jugador. */
+function findPrey(e, radius) {
+  W.Hash.query(e.t.x, e.t.y, radius, E._q2);
+  let best = null, bd = radius * radius;
+  for (let i = 0; i < E._q2.length; i++) {
+    const t = E._q2[i];
+    if (t === e || t.tg.dead) continue;
+    if (t.type !== 'creature' && t.type !== 'livestock') continue;
+    if (t.tg.tamed || t.tg.owner === 'player' || t.tg.mounted) continue;
+    if (t.tg.boss || t.tg.guardian) continue;
+    if (!D.ECO.hunts(e.species, t.species)) continue;
+    const d = U.dist2(e.t.x, e.t.y, t.t.x, t.t.y);
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+/** Depredador del que esta criatura debe huir. */
+function findThreat(e, radius) {
+  W.Hash.query(e.t.x, e.t.y, radius, E._q2);
+  let best = null, bd = radius * radius;
+  for (let i = 0; i < E._q2.length; i++) {
+    const t = E._q2[i];
+    if (t === e || t.tg.dead || t.type !== 'creature') continue;
+    if (t.tg.tamed || t.tg.baby) continue;
+    if (!D.ECO.fears(e.species, t.species)) continue;
+    const d = U.dist2(e.t.x, e.t.y, t.t.x, t.t.y);
+    if (d < bd) { bd = d; best = t; }
+  }
+  return best;
+}
+/** Patrón activo: los jefes cambian de patrón por fase de vida. */
+function activePattern(e) {
+  const sd = D.SPECIES[e.species];
+  if (!sd) return null;
+  if (sd.boss && sd.boss.phases) {
+    const ph = D.ECO.bossPhase(sd, e.st.hp / Math.max(1, e.st.maxHp));
+    if (ph) return ph;
+  }
+  return sd.pattern || null;
+}
+function think(e) {
+  const p = E.player;
+  const sd = e.species ? D.SPECIES[e.species] : null;
+  if (e.type === 'worker') { thinkWorker(e); return; }
+  if (e.type === 'npc') { thinkNpc(e); return; }
+  if (e.type === 'guard') {
+    const foe = findEnemy(e, 11);
+    if (!foe) dropCombat(e);
+    e.ai.state = foe ? 'chase' : 'guard';
+    e.ai.target = foe;
+    return;
+  }
+  if (e.tg.mounted) { e.ai.state = 'ridden'; dropCombat(e); return; }
+  /* Guardianes de ciudad y de tus construcciones */
+  if (e.tg.guardian === 'player' || e.tg.guardian === 'city') {
+    if (sd && sd.nocturnal && CR.Time && CR.Time.night < 0.4) {
+      e.ai.state = 'perch'; e.ai.perch = true; e.ai.target = null; dropCombat(e); return;
+    }
+    e.ai.perch = false;
+    const foe = findEnemy(e, e.ai.leash);
+    if (!foe) dropCombat(e);
+    e.ai.state = foe ? 'chase' : 'guard';
+    e.ai.target = foe;
+    return;
+  }
+  if (e.tg.tamed) {
+    if (e.tg.livestock) {
+      const th = findThreat(e, B.AI_FLEE_RADIUS);
+      e.ai.state = th ? 'flee' : 'wander';
+      e.ai.threat = th;
+      return;
+    }
+    const foe = findEnemy(e, 9);
+    if (foe) { e.ai.state = 'chase'; e.ai.target = foe; }
+    else { e.ai.state = 'follow'; e.ai.target = null; dropCombat(e); }
+    return;
+  }
+  if (e.tg.livestock) {
+    const th = findThreat(e, B.AI_FLEE_RADIUS);
+    e.ai.state = th ? 'flee' : 'wander';
+    e.ai.threat = th;
+    return;
+  }
+  if (e.tg.baby) {
+    const th = findThreat(e, B.AI_FLEE_RADIUS);
+    const dp = p ? U.dist2(e.t.x, e.t.y, p.t.x, p.t.y) : 1e9;
+    e.ai.threat = th || (dp < 16 ? p : null);
+    e.ai.state = e.ai.threat ? 'flee' : 'wander';
+    return;
+  }
+  /* Guardianes de santuario */
+  if (e.tg.guardian === 'zone') {
+    const foe = findEnemy(e, e.ai.leash);
+    if (!foe) dropCombat(e);
+    e.ai.state = foe ? 'chase' : 'guard';
+    e.ai.target = foe;
+    return;
+  }
+  const beh = sd ? sd.behavior : 'passive';
+  /* 1 · Huir de depredadores */
+  if (sd && (sd.diet === 'herbivore' || sd.diet === 'insectivore' || sd.faction === 'prey')) {
+    const th = findThreat(e, B.AI_FLEE_RADIUS);
+    if (th) {
+      e.ai.state = 'flee'; e.ai.threat = th; e.ai.target = null; dropCombat(e); return;
+    }
+  }
+  /* 2 · Detectar al jugador (la sigilo y la noche modifican el alcance) */
+  const stealth = p ? (p.stealth || 0) : 0;
+  let aggro = (sd ? sd.aggro : 4) * (1 - stealth);
+  if (sd && sd.nocturnal && CR.Time && CR.Time.night > 0.5) aggro *= 1.25;
+  const distP = p && !p.ko ? U.dist2(e.t.x, e.t.y, p.t.x, p.t.y) : 1e9;
+  const wasChasing = e.ai.state === 'chase' && e.ai.target === p;
+  const seeR = wasChasing ? aggro * 1.6 : aggro;
+  const aggressive = (beh === 'hostile' || beh === 'ambush' || beh === 'territorial' || e.tg.hostile);
+  const awake = !sd || !sd.nocturnal || (CR.Time && CR.Time.night > 0.35) || e.tg.hostile;
+  if (aggressive && awake && distP < seeR * seeR) {
+    if (W.lineOfSight(e.t.x, e.t.y, p.t.x, p.t.y)) {
+      e.ai.state = 'chase'; e.ai.target = p; e.ai.prey = null;
+      e.ai.giveup = B.AI_CHASE_GIVEUP;
+      return;
+    }
+  }
+  /* 3 · Cazar presas (los carnívoros trabajan aunque no te vean) */
+  if (sd && (sd.diet === 'carnivore' || sd.diet === 'omnivore')) {
+    if (!e.ai.prey || e.ai.prey.tg.dead || e.ai.prey.tg.tamed) e.ai.prey = null;
+    if (!e.ai.prey && e.ai.rest <= 0.4) e.ai.prey = findPrey(e, B.AI_HUNT_RADIUS);
+    if (e.ai.prey) { e.ai.state = 'hunt'; e.ai.target = e.ai.prey; return; }
+  }
+  if (beh === 'skittish' && distP < aggro * aggro) {
+    e.ai.state = 'flee'; e.ai.threat = p; e.ai.target = null; dropCombat(e); return;
+  }
+  /* 4 · Territorio: nunca abandona su santuario o su hogar */
+  const homeD2 = U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y);
+  if (homeD2 > e.ai.leash * e.ai.leash) {
+    e.ai.state = 'return'; e.ai.target = null; e.ai.prey = null; dropCombat(e); return;
+  }
+  if (e.ai.state !== 'wander') dropCombat(e);
+  e.ai.state = 'wander'; e.ai.target = null;
+}
+function thinkNpc(e) {
+  const nd = D.NPCS[e.npcId];
+  if (e.tg.angry) { e.ai.state = 'flee'; e.ai.threat = E.player; dropCombat(e); return; }
+  if (e.tg.hunter) {
+    if (!e.ai.prey || e.ai.prey.tg.dead) e.ai.prey = findPrey(e, 16);
+    if (e.ai.prey) { e.ai.state = 'hunt'; e.ai.target = e.ai.prey; return; }
+  }
+  if (e.tg.wanderer && e.ai.route && e.ai.route.length) { e.ai.state = 'route'; return; }
+  if (nd && nd.post) { e.ai.state = 'wander'; e.ai.leash = 1.2; return; }
+  e.ai.state = 'wander';
+}
+function thinkWorker(e) {
+  const role = e.tg.role;
+  if (e.tg.child && (e.tg.stage === 'baby' || e.tg.stage === 'child')) {
+    e.ai.state = 'wander'; e.ai.leash = 7; return;
+  }
+  if (role === 'follow') {
+    const foe = findEnemy(e, 10);
+    if (!foe) dropCombat(e);
+    e.ai.state = foe ? 'chase' : 'follow'; e.ai.target = foe; return;
+  }
+  if (role === 'guard') {
+    const foe = findEnemy(e, 10);
+    if (!foe) dropCombat(e);
+    e.ai.state = foe ? 'chase' : 'guard'; e.ai.target = foe; return;
+  }
+  if (role === 'farm' || role === 'water' || role === 'tend' || role === 'haul') { e.ai.state = 'work'; return; }
+  e.ai.state = 'wander';
+}
+
+/* ---------- Golpes: telegrafía → activo → recuperación → descanso ---------- */
+function startMove(e, mv, target) {
+  e.ai.mv = mv; e.ai.mvT = 0; e.ai.mvPhase = 'wind';
+  e.an.tele = mv.wind;
+  if (target) e.t.ang = Math.atan2(target.t.y - e.t.y, target.t.x - e.t.x);
+  if (mv.wind >= 0.3) {
+    const r = (mv.kind === 'aoe' || mv.kind === 'pool' || mv.kind === 'gaze') ? (mv.range || 3) : 1.1;
+    fx('telegraph', e.t.x, e.t.y, { r: r, t: mv.wind });
+    if (e.tg.boss) sfxAt('roar', e.t.x, e.t.y);
+  }
+}
+function execMove(e, mv, target) {
+  const dmg = e.cb.dmg * (mv.mul || 1);
+  const kind = mv.kind;
+  e.an.atk = 0.26;
+  e.an.tele = 0;
+  if (kind === 'melee' || kind === 'dash' || kind === 'fly_dive') {
+    if (kind !== 'melee' && target) {
+      const dx = target.t.x - e.t.x, dy = target.t.y - e.t.y, d = U.len(dx, dy) || 1;
+      const push = mv.dash || 8;
+      e.v.x += (dx / d) * push; e.v.y += (dy / d) * push;
+      if (kind === 'fly_dive') {
+        e.tg.flying = true;
+        setTimeoutSafe(e, 0.6, function () { if (!e.tg.dead && !e.tg.mounted) e.tg.flying = false; });
+      }
+      fx('dust', e.t.x, e.t.y);
+    }
+    const reach = (mv.range || e.cb.reach) + 0.45;
+    const hits = mv.hits || 1;
+    W.Hash.query(e.t.x, e.t.y, reach + 1.0, E._q1);
+    let n = 0;
+    for (let i = 0; i < E._q1.length && n < hits; i++) {
+      const t = E._q1[i];
+      if (!hostileTo(e, t) && e.ai.prey !== t) continue;
+      const rr = reach + (t.tg.scale || 1) * 0.3;
+      if (U.dist2(e.t.x, e.t.y, t.t.x, t.t.y) > rr * rr) continue;
+      E.damage(t, dmg, e, mv);
+      n++;
+    }
+    sfxAt(n ? (e.tg.boss ? 'hit' : 'swing') : 'swing', e.t.x, e.t.y);
+    if (n && mv.knock) shake(e.tg.boss ? 6 : 3);
+  } else if (kind === 'aoe') {
+    const r = mv.range || 3;
+    shake(e.tg.boss ? 8 : 4);
+    fx('shock', e.t.x, e.t.y, { r: r, fire: !!mv.burn });
+    sfxAt(mv.burn ? 'fire' : 'hit', e.t.x, e.t.y);
+    W.Hash.query(e.t.x, e.t.y, r, E._q1);
+    for (let i = 0; i < E._q1.length; i++) {
+      const t = E._q1[i];
+      if (!hostileTo(e, t)) continue;
+      if (U.dist2(e.t.x, e.t.y, t.t.x, t.t.y) > r * r) continue;
+      E.damage(t, dmg, e, mv);
+    }
+    if (mv.healAlly) {
+      W.Hash.query(e.t.x, e.t.y, r, E._q2);
+      for (let i = 0; i < E._q2.length; i++) {
+        const t = E._q2[i];
+        if (t === e || t.tg.dead || t.species !== e.species) continue;
+        t.st.hp = Math.min(t.st.maxHp, t.st.hp + mv.healAlly);
+        if (mv.cleanse) { t.cb.poison = 0; t.cb.poisonT = 0; t.cb.bleed = 0; t.cb.bleedT = 0; }
+        fx('heal', t.t.x, t.t.y);
+      }
+    }
+    if (mv.ring) {
+      for (let i = 0; i < mv.ring; i++) {
+        const a = (i / mv.ring) * U.TAU;
+        spawnProjectile(e, e.t.x + cos(a) * 9, e.t.y + sin(a) * 9, 6, dmg * 0.55,
+          mv.burn ? 'fire' : 'rock',
+          { hostile: true, effect: mv.burn ? 'burn' : null, ang: a, r: 0.36, life: 2 });
+      }
+    }
+  } else if (kind === 'spit') {
+    if (!target) return;
+    const cnt = mv.count || 1, spread = mv.spread || 0;
+    const base = Math.atan2(target.t.y - e.t.y, target.t.x - e.t.x);
+    const eff = mv.poison ? 'poison' : (mv.burn ? 'burn' : (mv.slow ? 'slow' : null));
+    for (let i = 0; i < cnt; i++) {
+      const a = base + (cnt > 1 ? (i - (cnt - 1) / 2) * spread : 0);
+      spawnProjectile(e, e.t.x + cos(a) * 9, e.t.y + sin(a) * 9, 9, dmg, mv.proj || 'rock',
+        { hostile: true, effect: eff, ang: a, r: 0.34, life: 2.4 });
+    }
+    sfxAt('swing', e.t.x, e.t.y);
+  } else if (kind === 'pool') {
+    if (!target) return;
+    const cnt = mv.count || 3, rng = rngAI();
+    for (let i = 0; i < cnt; i++) {
+      const a = rng.next() * U.TAU, d = rng.range(0.4, mv.range || 3);
+      E.hazards.push({
+        x: target.t.x + cos(a) * d, y: target.t.y + sin(a) * d, r: mv.r || 1.6,
+        type: mv.hazard || 'poison', life: mv.life || 8, dps: Math.max(2, dmg * 0.35),
+        t: 0, hostile: true, owner: e
+      });
+    }
+    sfxAt(mv.hazard === 'fire' ? 'fire' : 'poison', e.t.x, e.t.y);
+  } else if (kind === 'gaze') {
+    if (!target) return;
+    const r = mv.range || 5, cone = mv.cone || 0.7;
+    const base = Math.atan2(target.t.y - e.t.y, target.t.x - e.t.x);
+    fx('shock', e.t.x + cos(base) * 2, e.t.y + sin(base) * 2, { r: r * 0.6, fire: !!mv.burn });
+    W.Hash.query(e.t.x, e.t.y, r, E._q1);
+    for (let i = 0; i < E._q1.length; i++) {
+      const t = E._q1[i];
+      if (!hostileTo(e, t)) continue;
+      const dx = t.t.x - e.t.x, dy = t.t.y - e.t.y, d = U.len(dx, dy);
+      if (d > r) continue;
+      if (Math.abs(U.angDelta(base, Math.atan2(dy, dx))) > cone) continue;
+      E.damage(t, dmg, e, mv);
+    }
+    sfxAt(mv.burn ? 'fire' : 'poison', e.t.x, e.t.y);
+  } else if (kind === 'summon') {
+    if (e.ai.summonCd > 0) return;
+    e.ai.summonCd = 12;
+    const cnt = mv.count || 1;
+    for (let i = 0; i < cnt; i++) {
+      if (E.list.length >= E.CAP - 4) break;
+      const sp = E.freeSpotNear(e.t.x, e.t.y, 3);
+      const m = E.spawnCreature(mv.species, sp.x, sp.y, { persist: false, noBaby: true });
+      if (m) {
+        m.ai.home.x = e.ai.home.x; m.ai.home.y = e.ai.home.y;
+        m.ai.leash = e.ai.leash; m.tg.hostile = true;
+        m.tg.zone = e.tg.zone; m.ai.zone = e.ai.zone;
+      }
+    }
+    fx('legend', e.t.x, e.t.y);
+    sfxAt('roar', e.t.x, e.t.y);
+  } else if (kind === 'heal') {
+    if (mv.once && e.ai.healOnce) return;
+    if (mv.once) e.ai.healOnce = true;
+    e.st.hp = Math.min(e.st.maxHp, e.st.hp + e.st.maxHp * (mv.healPct || 0.05));
+    fx('heal', e.t.x, e.t.y); fx('legend', e.t.x, e.t.y);
+    floater(e.t.x, e.t.y - 1.2, '¡Renace!', '#ffd76a');
+    sfxAt('bell', e.t.x, e.t.y);
+  } else if (kind === 'buff') {
+    if (mv.selfDef) {
+      e.cb.def += mv.selfDef;
+      setTimeoutSafe(e, mv.selfT || 6, function () { if (!e.tg.dead) e.cb.def = Math.max(0, e.cb.def - mv.selfDef); });
+    }
+    if (mv.allyDmg) {
+      W.Hash.query(e.t.x, e.t.y, mv.range || 6, E._q2);
+      for (let i = 0; i < E._q2.length; i++) {
+        const t = E._q2[i];
+        if (t.tg.dead || t.species !== e.species) continue;
+        const bonus = Math.round(t.cb.dmg * mv.allyDmg);
+        if (bonus <= 0) continue;
+        t.cb.dmg += bonus;
+        setTimeoutSafe(t, mv.allyT || 10, function () { if (!t.tg.dead) t.cb.dmg = Math.max(1, t.cb.dmg - bonus); });
+        fx('spark', t.t.x, t.t.y);
+      }
+    }
+    fx('spark', e.t.x, e.t.y);
+    sfxAt('roar', e.t.x, e.t.y);
+  }
+}
+/** Devuelve true si la criatura está ocupada (telegrafía, golpe o descanso). */
+function updateCombat(e, dt, target) {
+  const pat = activePattern(e);
+  if (!pat || !pat.moves || !pat.moves.length) return false;
+  if (e.cb.stagger > 0) return true;
+  if (e.ai.mv) {
+    const mv = e.ai.mv;
+    e.ai.mvT += dt;
+    e.an.tele = Math.max(0, e.an.tele - dt);
+    if (e.ai.mvPhase === 'wind') {
+      if (target) e.t.ang = U.angDamp(e.t.ang, Math.atan2(target.t.y - e.t.y, target.t.x - e.t.x), 8, dt);
+      if (e.ai.mvT >= mv.wind) { e.ai.mvPhase = 'active'; e.ai.mvT = 0; execMove(e, mv, target); }
+      return true;
+    }
+    if (e.ai.mvPhase === 'active') {
+      if (e.ai.mvT >= mv.active) { e.ai.mvPhase = 'recover'; e.ai.mvT = 0; }
+      return true;
+    }
+    if (e.ai.mvT >= mv.recover) {
+      e.ai.mv = null; e.ai.mvPhase = '';
+      e.ai.burst++;
+      const rng = rngAI();
+      const bmax = pat.burst ? rng.int(pat.burst[0], pat.burst[1]) : 1;
+      if (pat.relentless) e.ai.rest = 0.12;
+      else if (e.ai.burst >= bmax) {
+        e.ai.burst = 0;
+        e.ai.rest = pat.rest ? rng.range(pat.rest[0], pat.rest[1])
+                             : rng.range(B.AI_REST_MIN, B.AI_REST_MAX);
+      } else e.ai.rest = 0.08;
+    }
+    return true;
+  }
+  if (e.ai.rest > 0) { e.ai.rest -= dt; return true; }
+  if (!target) return false;
+  const d2 = U.dist2(e.t.x, e.t.y, target.t.x, target.t.y);
+  let pick = null;
+  /* Primero un golpe que ya alcance; si no, uno de largo alcance o embestida */
+  for (let i = 0; i < pat.moves.length; i++) {
+    const mv = pat.moves[i];
+    if (mv.kind === 'summon' || mv.kind === 'heal' || mv.kind === 'buff') continue;
+    const r = (mv.range || e.cb.reach) + 0.5;
+    if (d2 <= r * r) { pick = mv; break; }
+  }
+  if (!pick) {
+    for (let i = 0; i < pat.moves.length; i++) {
+      const mv = pat.moves[i];
+      if (mv.kind !== 'spit' && mv.kind !== 'gaze' && mv.kind !== 'pool' &&
+          mv.kind !== 'dash' && mv.kind !== 'fly_dive') continue;
+      const r = mv.range || 4;
+      if (d2 <= r * r) { pick = mv; break; }
+    }
+  }
+  if (!pick) {
+    /* Utilidades del jefe: invocar, curarse o rugir si están disponibles */
+    for (let i = 0; i < pat.moves.length; i++) {
+      const mv = pat.moves[i];
+      if (mv.kind === 'summon' && e.ai.summonCd <= 0 && d2 < 144) { pick = mv; break; }
+      if (mv.kind === 'heal' && !(mv.once && e.ai.healOnce) && e.st.hp < e.st.maxHp * 0.5) { pick = mv; break; }
+      if (mv.kind === 'buff' && d2 < 100 && rngAI().chance(0.25)) { pick = mv; break; }
+    }
+  }
+  if (!pick) return false;
+  startMove(e, pick, target);
+  return true;
+}
+
+/* ---------- Timers diferidos seguros (sin setTimeout del navegador) ---------- */
+const _timers = [];
+function setTimeoutSafe(e, delay, fn) { _timers.push({ t: delay, fn: fn, e: e }); }
+function tickTimers(dt) {
+  for (let i = _timers.length - 1; i >= 0; i--) {
+    const t = _timers[i];
+    t.t -= dt;
+    if (t.t > 0) continue;
+    _timers.splice(i, 1);
+    if (!t.e || !t.e.tg.dead) {
+      try { t.fn(); } catch (err) { CR.reportError(err, 'entity.timer'); }
+    }
+  }
+}
+
+/* ---------- Actualización por entidad ---------- */
+function updateCreature(e, dt) {
+  const sd = e.species ? D.SPECIES[e.species] : null;
+  const p = E.player;
+  e.cb.cd = Math.max(0, e.cb.cd - dt);
+  e.cb.iframe = Math.max(0, e.cb.iframe - dt);
+  e.an.atk = Math.max(0, e.an.atk - dt);
+  e.an.hurt = Math.max(0, e.an.hurt - dt);
+  e.an.bob = Math.max(0, e.an.bob - dt);
+  e.an.tele = Math.max(0, e.an.tele - dt);
+  e.ai.summonCd = Math.max(0, e.ai.summonCd - dt);
+  tickDots(e, dt);
+  if (e.tg.dead) return;
+  let speed = (sd ? sd.speed : 3) * (e.tg.baby ? 0.85 : 1) * (e.tg.tamed ? 1.08 : 1);
+  if (e.cb.slow > 0) speed *= (1 - e.cb.slow);
+  if (e.cb.stagger > 0) speed *= 0.2;
+  /* Sedado: inmóvil e inofensivo; si despierta sin domar, pierde la confianza */
+  if (e.tg.sedated > 0) {
+    e.tg.sedated -= dt;
+    e.ai.state = 'idle'; e.ai.target = null; dropCombat(e);
+    if (e.tg.sedated <= 0 && !e.tg.tamed) {
+      e.tg.tameProgress = 0;
+      if (sd) e.tg.hostile = (sd.behavior === 'hostile' || sd.behavior === 'ambush');
+      toast(e.name + ' despierta… y no está contento.', 'bad');
+    }
+    return;
+  }
+  /* Vínculo: se gana quieto y cerca, se pierde al atacar o correr */
+  if (sd && sd.tame && sd.tame.method === 'bond' && !e.tg.tamed && p) {
+    const d2 = U.dist2(e.t.x, e.t.y, p.t.x, p.t.y);
+    const still = U.len(p.vx || 0, p.vy || 0) < 1.2;
+    if (d2 < 9 && still && !p.act) e.ai.calm = Math.min(6, (e.ai.calm || 0) + dt);
+    else e.ai.calm = Math.max(0, (e.ai.calm || 0) - dt * 1.5);
+  }
+  /* Empuje residual (embestidas, knockback) */
+  if (Math.abs(e.v.x) > 0.02 || Math.abs(e.v.y) > 0.02) {
+    move(e, e.v.x * dt, e.v.y * dt, e.tg.flying);
+    const decay = Math.pow(0.0006, dt);
+    e.v.x *= decay; e.v.y *= decay;
+  }
+  e.ai.t += dt;
+  const thinkEvery = B.AI_THINK + (e.ai.phase % 6) * 0.012;
+  if (e.ai.t >= thinkEvery) { e.ai.t = 0; think(e); }
+  const st = e.ai.state;
+  if (st === 'ridden') return;
+  if (st === 'perch') {
+    if (U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y) > 1.5)
+      stepToward(e, e.ai.home.x, e.ai.home.y, speed * 0.5, dt, false);
+    return;
+  }
+  if (st === 'route') {
+    const route = e.ai.route;
+    if (!route || !route.length) { e.ai.state = 'wander'; return; }
+    const wp = route[e.ai.routeI % route.length];
+    if (stepToward(e, wp.x + 0.5, wp.y + 0.5, speed * 0.62, dt, false))
+      e.ai.routeI = (e.ai.routeI + 1) % route.length;
+    return;
+  }
+  if ((st === 'chase' || st === 'hunt') && e.ai.target && !e.ai.target.tg.dead && !e.ai.target.ko) {
+    const t = e.ai.target;
+    const busy = updateCombat(e, dt, t);
+    const d2 = U.dist2(e.t.x, e.t.y, t.t.x, t.t.y);
+    const reach = (sd ? sd.reach : 1) + 0.4;
+    /* En telegrafía se queda quieto: el jugador ve venir el golpe */
+    if (e.ai.mv && e.ai.mvPhase === 'wind') { e.an.walk += dt; return; }
+    if (d2 > reach * reach || !busy) {
+      const d = Math.sqrt(d2);
+      if (d > 5.5 && !e.ai.path && rngAI().chance(0.03)) requestPath(e, t.t.x, t.t.y, e.tg.flying);
+      if (e.ai.path) followPath(e, speed, dt, e.tg.flying);
+      else stepToward(e, t.t.x, t.t.y, speed, dt, e.tg.flying);
+    } else e.an.walk += dt * 1.5;
+    /* Abandonar: el jugador se aleja o la criatura sale de su territorio */
+    const homeD2 = U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y);
+    if (homeD2 > e.ai.leash * e.ai.leash * 1.3) {
+      e.ai.state = 'return'; e.ai.target = null; e.ai.prey = null; dropCombat(e);
+    } else if (t === p) {
+      const ag = (sd ? sd.aggro : 5);
+      if (d2 > ag * ag * 4) {
+        e.ai.giveup -= dt;
+        if (e.ai.giveup <= 0) { e.ai.state = 'return'; e.ai.target = null; dropCombat(e); }
+      } else e.ai.giveup = B.AI_CHASE_GIVEUP;
+    } else if (d2 > B.AI_HUNT_RADIUS * B.AI_HUNT_RADIUS * 1.6) {
+      e.ai.prey = null; e.ai.target = null; e.ai.state = 'return'; dropCombat(e);
+    }
+    return;
+  }
+  if (st === 'follow') {
+    const tx = p ? p.t.x : e.ai.home.x, ty = p ? p.t.y : e.ai.home.y;
+    const d2 = U.dist2(e.t.x, e.t.y, tx, ty);
+    if (d2 > 5) {
+      if (d2 > 80 && !e.ai.path) requestPath(e, tx, ty, e.tg.flying);
+      if (e.ai.path) followPath(e, speed * 1.2, dt, e.tg.flying);
+      else stepToward(e, tx, ty, speed * 1.2, dt, e.tg.flying);
+    } else if (d2 < 1.6) e.an.walk += dt * 0.5;
+    return;
+  }
+  if (st === 'flee') {
+    const src = e.ai.threat || p || e;
+    const dx = e.t.x - src.t.x, dy = e.t.y - src.t.y, d = U.len(dx, dy) || 1;
+    stepToward(e, e.t.x + (dx / d) * 5, e.t.y + (dy / d) * 5, speed * 1.3, dt, e.tg.flying);
+    return;
+  }
+  if (st === 'return') {
+    if (stepToward(e, e.ai.home.x, e.ai.home.y, speed, dt, e.tg.flying)) e.ai.state = 'wander';
+    return;
+  }
+  if (st === 'guard') {
+    if (U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y) > 2)
+      stepToward(e, e.ai.home.x, e.ai.home.y, speed * 0.75, dt, false);
+    return;
+  }
+  if (st === 'work') { updateWork(e, dt, speed); return; }
+  if (st === 'idle') { e.an.walk += dt * 0.3; return; }
+  /* Deambular */
+  e.ai.wanderT -= dt;
+  if (e.ai.wanderT <= 0) {
+    const rng = rngAI();
+    e.ai.wanderT = 1.6 + rng.next() * 3.2;
+    if (e.type === 'npc') {
+      const nd = D.NPCS[e.npcId];
+      const hr = CR.Time ? CR.Time.hour : 12;
+      if (nd && nd.post) {
+        e.ai.atPost = true;
+        const a0 = rng.next() * U.TAU, d0 = rng.next() * 0.6;
+        e.ai.wx = e.ai.home.x + cos(a0) * d0; e.ai.wy = e.ai.home.y + sin(a0) * d0;
+        e.ai.wanderT = 1.2 + rng.next() * 2;
+      } else {
+        const shopHours = hr >= 7 && hr < 19, rest = hr >= 22 || hr < 6;
+        e.ai.atPost = shopHours || rest;
+        let ok = false;
+        for (let tries = 0; tries < 8 && !ok; tries++) {
+          const r = (nd && nd.farmer) ? 9 : 12;
+          const a1 = rng.next() * U.TAU, d1 = rng.next() * r;
+          const tx = e.ai.home.x + cos(a1) * d1, ty = e.ai.home.y + sin(a1) * d1;
+          if (W.walkable(Math.floor(tx), Math.floor(ty), false)) { e.ai.wx = tx; e.ai.wy = ty; ok = true; }
+        }
+        if (!ok) { e.ai.wx = e.ai.home.x; e.ai.wy = e.ai.home.y; }
+        e.ai.wanderT += 2 + rng.next() * 4;
+      }
+    } else {
+      const r = e.tg.livestock ? 2.2 : Math.min(6, e.ai.leash * 0.5);
+      const a = rng.next() * U.TAU, d = rng.next() * r;
+      const tx = e.ai.home.x + cos(a) * d, ty = e.ai.home.y + sin(a) * d;
+      if (W.walkable(Math.floor(tx), Math.floor(ty), e.tg.flying)) { e.ai.wx = tx; e.ai.wy = ty; }
+      else { e.ai.wx = e.ai.home.x; e.ai.wy = e.ai.home.y; }
+    }
+    e.ai.hasW = true;
+  }
+  if (e.ai.hasW) stepToward(e, e.ai.wx, e.ai.wy, speed * (e.type === 'npc' ? 0.5 : 0.42), dt, e.tg.flying);
+}
+/* ---------- Trabajadores por rol ---------- */
+function updateWork(e, dt, speed) {
+  e.tg.workT -= dt;
+  if (e.ai.path) { followPath(e, speed, dt, false); return; }
+  if (e.tg.workT > 0) { e.an.walk += dt * 0.5; return; }
+  e.tg.workT = 1.2;
+  const role = e.tg.role;
+  if (role === 'farm' || role === 'water') {
+    let target = null, bd = 1e9;
+    W.soil.forEach(function (s, idx) {
+      if (s.owner && s.owner !== 'player') return;
+      const x = idx % C.WORLD, y = (idx / C.WORLD) | 0;
+      let want;
+      if (role === 'water') want = !!s.crop && s.growth < 1 && !s.watered;
+      else want = (s.crop && s.growth >= 1) || !s.crop;
+      if (!want) return;
+      const d = U.dist2(e.t.x, e.t.y, x + 0.5, y + 0.5);
+      if (d < bd && d < 1200) {
+        bd = d;
+        target = { x: x, y: y, water: role === 'water', ready: !!(s.crop && s.growth >= 1) };
+      }
+    });
+    if (target) {
+      if (bd < 1.8) {
+        Bus.emit('work', {
+          action: target.water ? 'water' : (target.ready ? 'harvest' : 'plant'),
+          worker: e, x: target.x, y: target.y
+        });
+        e.an.atk = 0.3; e.tg.workT = 1.5;
+      } else if (!e.ai.path) requestPath(e, target.x, target.y, false);
+    } else {
+      const home = W.bestHouse();
+      if (home) stepToward(e, home.x + home.w / 2, home.y + home.h + 0.6, speed * 0.6, dt, false);
+    }
+    return;
+  }
+  if (role === 'tend') {
+    let target = null, bd = 1e9;
+    for (let i = 0; i < E.list.length; i++) {
+      const a = E.list[i];
+      if (a.tg.dead || !a.tg.livestock || a.tg.owner !== 'player') continue;
+      const d = U.dist2(e.t.x, e.t.y, a.t.x, a.t.y);
+      if (d < bd) { bd = d; target = a; }
+    }
+    if (target) {
+      if (bd < 2.4) {
+        Bus.emit('work', { action: target.tg.ready ? 'collect' : 'feed', worker: e, animal: target });
+        e.an.atk = 0.3; e.tg.workT = 2;
+      } else if (!e.ai.path) requestPath(e, target.t.x, target.t.y, false);
+    }
+    return;
+  }
+  if (role === 'haul') {
+    let target = null, bd = 1e9;
+    for (let i = 0; i < E.loot.length; i++) {
+      const l = E.loot[i];
+      const d = U.dist2(e.t.x, e.t.y, l.x, l.y);
+      if (d < bd && d < 900) { bd = d; target = l; }
+    }
+    if (target) {
+      if (bd < 1.4) { E.pickupLoot(target, false); e.tg.workT = 1; }
+      else if (!e.ai.path) requestPath(e, target.x, target.y, false);
+    }
+    return;
+  }
+  e.ai.state = 'wander';
+}
+
+/* ==========================================================
+20 · DIRECTOR DE SPAWN (ecología separada y territorial)
+========================================================== */
+function packSize(sd) {
+  if (sd.kind === 'boss' || sd.kind === 'mythic' || sd.elite) return 1;
+  const rng = rngAI();
+  if (sd.diet === 'carnivore' || sd.diet === 'omnivore')
+    return rng.int(B.SPAWN_PACK_PRED[0], B.SPAWN_PACK_PRED[1]);
+  if (sd.pack) {
+    /* Manadas pequeñas: los herbívoros ya no salen en grupos enormes */
+    const lo = Math.min(sd.pack[0], B.SPAWN_PACK_HERB[0]), hi = Math.max(lo, Math.min(sd.pack[1], B.SPAWN_PACK_HERB[1]));
+    return rng.int(lo, hi);
+  }
+  return 1;
+}
+function director(dt) {
+  const p = E.player;
+  if (!p) return;
+  E._spawnT -= dt;
+  if (E._spawnT > 0) return;
+  E._spawnT = B.SPAWN_TICK;
+  /* Limpieza y recuento de fauna activa */
+  let wild = 0, herb = 0;
+  const perSp = Object.create(null);
+  for (let i = 0; i < E.list.length; i++) {
+    const e = E.list[i];
+    if (e.tg.dead || e.tg.persist || e.type === 'npc' || e.type === 'guard') continue;
+    const d2 = U.dist2(p.t.x, p.t.y, e.t.x, e.t.y);
+    if (d2 > B.SPAWN_DESPAWN * B.SPAWN_DESPAWN) { e.tg.dead = true; continue; }
+    if (d2 < B.SPAWN_ACTIVE * B.SPAWN_ACTIVE) {
+      wild++;
+      perSp[e.species] = (perSp[e.species] || 0) + 1;
+      if (e.tg.diet === 'herbivore' || e.tg.diet === 'insectivore' || e.tg.faction === 'prey') herb++;
+    }
+  }
+  const rng = CR.streams ? CR.streams.spawn : rngAI();
+  const night = CR.Time ? CR.Time.night > 0.5 : false;
+  /* Fauna común: nunca dentro del buffer de la ciudad ni en santuarios */
+  if (wild < E.WILD_CAP && E.list.length < E.CAP - 12) {
+    for (let k = 0; k < B.SPAWN_TRIES; k++) {
+      const t = W.randomTileNear(p.t.x, p.t.y, B.SPAWN_RING[0], B.SPAWN_RING[1], rng);
+      if (!t) continue;
+      if (t.zone) continue;
+      if (W.cityDist(t.x, t.y) < B.SPAWN_CITY_BUFFER) continue;
+      const bd = D.BIOMES[t.biome];
+      if (!bd || !bd.spawns.length) continue;
+      let total = 0;
+      const pool = [];
+      for (let i = 0; i < bd.spawns.length; i++) {
+        const id = bd.spawns[i][0], sd = D.SPECIES[id];
+        if (!sd || sd.zone || sd.guard) continue;
+        if (sd.kind === 'boss' || sd.kind === 'livestock') continue;
+        if (sd.biomes && sd.biomes.length && sd.biomes.indexOf(t.biome) < 0) continue;
+        if (sd.nocturnal && !night && rng.chance(0.8)) continue;
+        /* Tope por especie y por herbívoros: aparecen lo justo, no en masa */
+        if ((perSp[id] || 0) >= B.SPECIES_CAP) continue;
+        if (herb >= B.HERB_CAP && (sd.diet === 'herbivore' || sd.diet === 'insectivore' || sd.faction === 'prey')) continue;
+        pool.push([id, bd.spawns[i][1]]);
+        total += bd.spawns[i][1];
+      }
+      if (!pool.length) continue;
+      let roll = rng.next() * total, pick = pool[0][0];
+      for (let i = 0; i < pool.length; i++) { roll -= pool[i][1]; if (roll <= 0) { pick = pool[i][0]; break; } }
+      const sd = D.SPECIES[pick];
+      const tile = W.speciesSpawnTile(pick, p.t.x, p.t.y, rng, E.list);
+      if (!tile) continue;
+      const n = packSize(sd);
+      let made = 0;
+      for (let i = 0; i < n; i++) {
+        if (E.list.length >= E.CAP - 8) break;
+        let sx = tile.x + 0.5, sy = tile.y + 0.5;
+        if (i > 0) {
+          const a = rng.next() * U.TAU, d = 2.4 + rng.next() * 4.5;
+          const nx = sx + cos(a) * d, ny = sy + sin(a) * d;
+          if (W.walkable(Math.floor(nx), Math.floor(ny), false)) { sx = nx; sy = ny; }
+        }
+        const e = E.spawnCreature(pick, sx, sy, {});
+        if (e) { made++; e.ai.home.x = tile.x + 0.5; e.ai.home.y = tile.y + 0.5; }
+      }
+      if (made) break;
+    }
+  }
+  /* Santuarios cercanos: solo su fauna exclusiva, dentro de su radio */
+  for (let i = 0; i < W.zones.length; i++) {
+    const z = W.zones[i];
+    if (U.dist2(p.t.x, p.t.y, z.x, z.y) > 70 * 70) continue;
+    const zd = D.ZONE_BY_ID[z.id];
+    if (!zd) continue;
+    const list = (zd.species || []).concat(zd.guard || []);
+    for (let k = 0; k < list.length; k++) {
+      const id = list[k], sd = D.SPECIES[id];
+      if (!sd) continue;
+      let count = 0;
+      for (let q = 0; q < E.list.length; q++)
+        if (E.list[q].species === id && !E.list[q].tg.dead && E.list[q].tg.zone === z.id) count++;
+      const want = sd.guard ? 2 : (sd.pack ? sd.pack[1] : 1);
+      if (count >= want) continue;
+      if (E.list.length >= E.CAP - 6) break;
+      const tile = W.speciesSpawnTile(id, p.t.x, p.t.y, rng, E.list);
+      if (tile) E.spawnCreature(id, tile.x + 0.5, tile.y + 0.5, {});
+    }
+  }
+  /* Campamentos de bandidos */
+  E._campT -= B.SPAWN_TICK;
+  if (E._campT <= 0) {
+    E._campT = 6;
+    for (let i = 0; i < W.camps.length; i++) {
+      const c = W.camps[i];
+      const d2 = U.dist2(p.t.x, p.t.y, c.x, c.y);
+      if (d2 > 60 * 60 || d2 < 14 * 14) continue;
+      let count = 0;
+      for (let k = 0; k < E.list.length; k++) {
+        const e = E.list[k];
+        if (!e.tg.dead && e.species === 'bandit' && U.dist2(e.t.x, e.t.y, c.x, c.y) < 100) count++;
+      }
+      if (count >= c.count || E.list.length >= E.CAP - 4) continue;
+      const sp = E.freeSpotNear(c.x, c.y, c.r * 0.7);
+      const b = E.spawnCreature('bandit', sp.x, sp.y, {});
+      if (b) { b.ai.home.x = c.x; b.ai.home.y = c.y; b.ai.leash = c.r + 6; }
+    }
+  }
+}
+
+/* ==========================================================
+21 · BUCLE PRINCIPAL DE ENTIDADES
+========================================================== */
+E.update = function (dt) {
+  tickTimers(dt);
+  if (E.hitstop > 0) { E.hitstop -= dt; return; }
+  const p = E.player;
+  for (let i = 0; i < E.list.length; i++) {
+    const e = E.list[i];
+    e.t.px = e.t.x; e.t.py = e.t.y;
+    e.an.spawn = Math.max(0, e.an.spawn - dt);
+  }
+  updatePlayer(dt);
+  for (let i = 0; i < E.list.length; i++) {
+    const e = E.list[i];
+    if (e === p || e.tg.dead) continue;
+    const far = p ? U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) : 0;
+    /* LOD de simulación: los lejanos piensan a menor frecuencia */
+    if (far > 74 * 74 && !e.tg.boss && !e.tg.persist) {
+      if ((e.id & 3) !== (E._frame & 3)) continue;
+      updateCreature(e, dt * 4);
+    } else if (far > 52 * 52 && !e.tg.boss) {
+      if ((e.id & 1) !== (E._frame & 1)) continue;
+      updateCreature(e, dt * 2);
+    } else updateCreature(e, dt);
+  }
+  updateProjectiles(dt);
+  updateHazards(dt);
+  updateLoot(dt);
+  W.Hash.rebuild(E.list);
+  director(dt);
+  E._frame = (E._frame + 1) | 0;
+  /* Barrido diferido de muertos */
+  for (let i = E.list.length - 1; i >= 0; i--) {
+    const e = E.list[i];
+    if (!e.tg.dead || e.type === 'player') continue;
+    E.byId.delete(e.id);
+    E.list.splice(i, 1);
+    release(e);
+  }
+  if (E.heat > 0) E.heat = Math.max(0, E.heat - B.HEAT_DECAY * dt * 0.1);
+};
+
+/* ==========================================================
+22 · CICLO DIARIO Y REAPARICIÓN
+========================================================== */
+E.onDay = function (day) {
+  E.day = day;
+  W.dayTick(day);
+  const rng = rngLoot();
+  for (let i = 0; i < E.list.length; i++) {
+    const e = E.list[i];
+    if (e.tg.dead) continue;
+    /* Crías salvajes que crecen */
+    if (e.tg.baby && !e.tg.child && day >= e.tg.growDay) {
+      const sd = D.SPECIES[e.species];
+      e.tg.baby = false;
+      e.tg.scale = sd ? sd.scale : 1;
+      e.name = (sd ? sd.name : e.name) + (e.tg.tamed ? ' (tuyo)' : '');
+      e.st.maxHp = sd ? sd.hp : e.st.maxHp; e.st.hp = e.st.maxHp;
+      e.cb.dmg = sd ? sd.dmg : e.cb.dmg;
+      if (sd && !e.tg.tamed) e.tg.hostile = (sd.behavior === 'hostile' || sd.behavior === 'ambush');
+      if (e.tg.tamed) { toast('¡' + e.name + ' ha crecido!', 'good'); fx('spark', e.t.x, e.t.y); }
+      Bus.emit('grew', { entity: e });
+    }
+    /* Ganado: produce si fue alimentado */
+    if (e.tg.livestock && e.tg.owner === 'player') {
+      if (e.tg.fed > 0) {
+        e.tg.fed--; e.tg.prodT++;
+        const sd = D.SPECIES[e.species];
+        if (sd && sd.livestock && e.tg.prodT >= sd.livestock.every && !e.tg.ready) {
+          e.tg.prodT = 0;
+          const weights = e.tg.feedQ || [90, 10, 0, 0];
+          let roll = rng.next() * 100, q = 0;
+          for (let k = 0; k < weights.length; k++) { roll -= weights[k]; if (roll <= 0) { q = k; break; } }
+          e.tg.ready = { id: sd.livestock.product, n: rng.int(sd.livestock.qty[0], sd.livestock.qty[1]), q: q };
+          if (sd.livestock.second) e.tg.ready2 = { id: sd.livestock.second, n: 1 };
+        }
+      } else e.tg.prodT = 0;
+    }
+    /* Compañeros y guardianes amanecen curados */
+    if (e.tg.tamed && !e.tg.livestock) e.st.hp = e.st.maxHp;
+    if (e.tg.tamed) { e.cb.poison = 0; e.cb.poisonT = 0; e.cb.burn = 0; e.cb.burnT = 0; e.cb.bleed = 0; e.cb.bleedT = 0; }
+  }
+  E.spawnBosses();
+  E.spawnWanderers();
+  E.syncGuardians();
+  Bus.emit('entities:day', { day: day });
+};
+E.respawnPlayer = function (x, y) {
+  const p = E.player;
+  if (!p) return;
+  p.t.x = x + 0.5; p.t.y = y + 0.5; p.t.px = p.t.x; p.t.py = p.t.y;
+  p.st.hp = Math.round(p.st.maxHp * 0.6);
+  p.st.st = p.st.maxSt * 0.6;
+  p.st.food = Math.max(25, p.st.food);
+  p.cb.poison = 0; p.cb.poisonT = 0;
+  p.cb.burn = 0; p.cb.burnT = 0;
+  p.cb.bleed = 0; p.cb.bleedT = 0;
+  p.cb.slow = 0; p.cb.slowT = 0;
+  p.cb.stagger = 0; p.cb.guard = 0;
+  p.ko = false;
+  p.v.x = p.v.y = 0; p.vx = p.vy = 0;
+  p.act = null; p.blk.on = false; p.cast = null;
+  p.rollT = 0; p.rollCd = 0;
+  if (p.mount) E.dismount();
+  forgetPlayer();
+  CR.Input.clearAll();
+  fx('spark', p.t.x, p.t.y);
+};
+
+/* ==========================================================
+23 · SERIALIZACIÓN
+========================================================== */
+E.serialize = function () {
+  const p = E.player;
+  if (!p) return null;
+  const persist = [];
+  for (let i = 0; i < E.list.length; i++) {
+    const e = E.list[i];
+    if (e === p || e.tg.dead || !e.tg.persist) continue;
+    if (e.type === 'npc' || e.type === 'guard') continue;
+    if (e.tg.boss) continue;
+    persist.push({
+      type: e.type, species: e.species, name: e.name, gender: e.gender,
+      x: e.t.x, y: e.t.y, hp: e.st.hp, maxHp: e.st.maxHp,
+      hx: e.ai.home.x, hy: e.ai.home.y,
+      tg: JSON.parse(JSON.stringify(e.tg))
+    });
+  }
+  return {
+    player: {
+      name: p.name, gender: p.gender, x: p.t.x, y: p.t.y, ang: p.t.ang,
+      hp: p.st.hp, maxHp: p.st.maxHp, st: p.st.st, maxSt: p.st.maxSt, food: p.st.food,
+      inv: p.inv, equip: p.equip, quick: p.quick, xp: p.xp, lvl: p.lvl, ammoId: p.ammoId,
+      gold: p.gold, debt: p.debt, free: p.free, bank: p.bank,
+      buffs: p.buffs, foodAcc: p.foodAcc
+    },
+    persist: persist, bossState: E.bossState, heat: E.heat, day: E.day, uid: E._uid
+  };
+};
+E.deserialize = function (data) {
+  if (!data || !data.player) return false;
+  try {
+    E.reset(false);
+    const pd = data.player;
+    const p = E.createPlayer(pd.name, pd.gender);
+    p.t.x = pd.x; p.t.y = pd.y; p.t.px = pd.x; p.t.py = pd.y; p.t.ang = pd.ang || 0;
+    p.inv = Array.isArray(pd.inv) ? pd.inv : p.inv;
+    p.equip = pd.equip || p.equip;
+    for (let i = 0; i < EQUIP_SLOTS.length; i++)
+      if (p.equip[EQUIP_SLOTS[i]] === undefined) p.equip[EQUIP_SLOTS[i]] = null;
+    p.quick = pd.quick || p.quick;
+    if (pd.xp) for (let i = 0; i < TRADES.length; i++) if (pd.xp[TRADES[i]]) p.xp[TRADES[i]] = pd.xp[TRADES[i]];
+    if (pd.lvl) {
+      p.lvl.xp = pd.lvl.xp || 0;
+      p.lvl.level = pd.lvl.level || D.levelFromXP(p.lvl.xp);
+      p.lvl.points = pd.lvl.points || 0;
+      for (let i = 0; i < D.SKILLS.length; i++) {
+        const id = D.SKILLS[i].id;
+        p.lvl.alloc[id] = (pd.lvl.alloc && pd.lvl.alloc[id]) || 0;
+      }
+    }
+    p.ammoId = pd.ammoId || null;
+    p.gold = pd.gold || 0;
+    p.debt = pd.debt === undefined ? B.DEBT : pd.debt;
+    p.free = !!pd.free; p.bank = pd.bank || 0;
+    p.buffs = pd.buffs || { bless: 0 };
+    p.foodAcc = pd.foodAcc || 0;
+    E.recalc(p);
+    p.st.maxHp = pd.maxHp || p.st.maxHp;
+    p.st.hp = U.clamp(pd.hp === undefined ? p.st.hp : pd.hp, 1, p.st.maxHp);
+    p.st.maxSt = pd.maxSt || p.st.maxSt;
+    p.st.st = U.clamp(pd.st === undefined ? p.st.st : pd.st, 0, p.st.maxSt);
+    p.st.food = U.clamp(pd.food === undefined ? p.st.food : pd.food, 0, p.st.maxFood);
+    E.autoAmmo(p);
+    E.spawnNPCs();
+    E.day = data.day || 1;
+    E.heat = data.heat || 0;
+    E.bossState = data.bossState || {};
+    if (Array.isArray(data.persist)) {
+      for (let i = 0; i < data.persist.length; i++) {
+        const s = data.persist[i];
+        let e = null;
+        if (s.type === 'worker') {
+          e = E.spawnWorker({
+            name: s.name, gender: s.gender, x: s.x, y: s.y,
+            role: s.tg.role, child: s.tg.child, stage: s.tg.stage, growDay: s.tg.growDay
+          });
+        } else if (s.species) {
+          e = E.spawnCreature(s.species, s.x, s.y, {
+            persist: true, tamed: s.tg.tamed, owner: s.tg.owner,
+            livestock: s.tg.livestock, noBaby: true
+          });
+        }
+        if (!e) continue;
+        e.name = s.name;
+        e.st.hp = s.hp; e.st.maxHp = s.maxHp;
+        e.ai.home.x = s.hx; e.ai.home.y = s.hy;
+        for (const k in s.tg) e.tg[k] = s.tg[k];
+        e.tg.dead = false;
+        if (e.tg.zone) {
+          for (let z = 0; z < W.zones.length; z++)
+            if (W.zones[z].id === e.tg.zone) { e.ai.zone = W.zones[z]; break; }
+        }
+        if (e.tg.guardian) e.ai.state = 'guard';
+        else if (e.tg.livestock) e.ai.state = 'wander';
+        else if (e.tg.tamed) e.ai.state = 'follow';
+      }
+    }
+    E.spawnBosses();
+    E.syncGuardians();
+    W.Hash.rebuild(E.list);
+    E._uid = Math.max(E._uid, data.uid || 0);
+    return true;
+  } catch (err) { CR.reportError(err, 'entities.deserialize'); return false; }
+};
+E.reset = function (keepPlayer) {
+  for (let i = 0; i < E.list.length; i++) release(E.list[i]);
+  E.list.length = 0;
+  E.byId.clear();
+  for (let i = 0; i < E.projectiles.length; i++) projPool.release(E.projectiles[i]);
+  E.projectiles.length = 0;
+  E.loot.length = 0;
+  E.hazards.length = 0;
+  _timers.length = 0;
+  E.bossState = {};
+  E.heat = 0; E.hitstop = 0;
+  E._spawnT = 0; E._campT = 0; E._uid = 0; E.day = 1; E._frame = 0;
+  E.aim.kind = null; E.aim.ref = null; E.aim.lock = null; E.aim.lockT = 0;
+  E.aim.node = null; E.aim.cands.length = 0; E.aim.draw = 0; E.aim.mode = 'melee';
+  E.hitMark.ref = null; E.hitMark.t = 0; E.hitMark.focusT = 0; E.hitMark.lag = 1;
+  E.nodeHit.node = null; E.nodeHit.t = 0; E.nodeHit.focusT = 0;
+  if (!keepPlayer) E.player = null;
+  W.Hash.clear();
+};
+
+console.info('[CR] entities.js v3 listo · canales de combate · apuntado pegajoso · ' +
+  Object.keys(D.SPECIES).length + ' especies con ecología · ' + D.SKILLS.length + ' ramas de habilidad');
+})();
