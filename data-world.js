@@ -1,7 +1,15 @@
 /* ============================================================
-KANATO DE JOTUN · data-world.js — Contenido v3 (parte 4 de 4)
-Registra edificios, estaciones, casas, camas, defensas, NPC con
-diálogos, contratos, nombres, consejos y la ayuda completa.
+KANATO DE JOTUN · data-world.js — Contenido v4 (parte 4 de 4)
+CAMBIOS v4:
+· Solo 5 estaciones construibles: fogata, banco, cocina, forja,
+  alambique. Desaparecen molino, potro, telar, horno, yunque y
+  mesa de flechas (sus recetas se reparten entre las 5).
+· Casas: funciones remapeadas a las 6 estaciones reales.
+· MERCADO PÚBLICO: horno público (funde, lento) y mesa pública
+  (crafteo básico) en la plaza. Gratis, sin construir nada.
+· Tiendas, gustos y contratos revisados contra data-items v4.
+· Ayuda y consejos reescritos: intro, kit inicial, herramientas
+  rotas, reparación, tiers y saberes.
 Al final valida TODAS las referencias cruzadas y sella los datos.
 ============================================================ */
 (function () {
@@ -31,37 +39,56 @@ D.CITY_STRUCTS = {
   house_small:  { name: 'Casa de Vhalor',        wall: '#c8b898', roof: '#8a6a4a', kind: 'house',     solid: true, enter: true },
   farm_house:   { name: 'Casa de granja',        wall: '#c0a880', roof: '#7a6a3a', kind: 'house',     solid: true, enter: true },
   pen:          { name: 'Corral de esclavos',    wall: '#8a7050', roof: '#6a5030', kind: 'pen',       solid: false, enter: false },
-  gargoyle_perch_city: { name: 'Repisa de gárgola', wall: '#8a8a90', roof: '#6a6a72', kind: 'bench',  solid: true, enter: false }
+  gargoyle_perch_city: { name: 'Repisa de gárgola', wall: '#8a8a90', roof: '#6a6a72', kind: 'bench',  solid: true, enter: false },
+  /* --- NUEVO v4: talleres públicos del mercado (mejora 2) --- */
+  public_forge: { name: 'Horno público',         wall: '#908880', roof: '#c05030', kind: 'forge',     solid: true, enter: false },
+  public_bench: { name: 'Mesa pública',          wall: '#b09060', roof: '#8a7040', kind: 'bench',     solid: true, enter: false }
+};
+
+/* Talleres públicos: disponibles desde el minuto 1, sin parcela ni nivel.
+   Contrapartida: enfriamiento entre usos, combustible extra y sin calidad.
+   world.js los coloca en la plaza y los expone con stationsNear/stationSource. */
+D.PUBLIC_STATIONS = {
+  public_forge: {
+    station: 'forge', name: 'Horno público', glyph: 'fire',
+    cd: 8, fuelPlus: 1, noQuality: true,
+    desc: 'Funde metal y forja lo básico para cualquiera. El fuego es compartido: tarda en recobrarse entre usos y gasta más leña. No salen piezas de calidad.'
+  },
+  public_bench: {
+    station: 'workbench', name: 'Mesa pública', glyph: 'build',
+    cd: 3, fuelPlus: 0, noQuality: true,
+    desc: 'Banco de trabajo de la plaza. Sirve para lo básico: cuero, tela, arcos, flechas y mochilas. Hay cola: unos segundos entre usos.'
+  }
 };
 
 /* ==========================================================
-2 · CASAS · 12 niveles con cadena de mejora
+2 · CASAS · 12 niveles, funciones sobre las 6 estaciones v4
 ========================================================== */
 const HOUSES = [
   ['shelter', 'Refugio de ramas', 0, [2, 2], 0, 6, 0, [], { wood: 8, fiber: 6 }, null,
-    'Un techo de ramas. No es una casa, pero es un sitio donde no te llueve.', '#8a7a52', '#6a5a34'],
+   'Un techo de ramas. No es una casa, pero es un sitio donde no te llueve.', '#8a7a52', '#6a5a34'],
   ['house_straw', 'Casa de paja', 1, [3, 3], 1, 20, 0, ['sleep', 'chest'], { wood: 20, straw: 12, fiber: 10 }, { lv: 2, skill: { artisan: 1 } },
-    'Cama y cofre. El primer hogar de verdad.', '#c8b070', '#b89a40'],
+   'Cama y cofre. El primer hogar de verdad.', '#c8b070', '#b89a40'],
   ['house_wood', 'Casa de madera', 2, [3, 3], 2, 30, 1, ['sleep', 'chest', 'campfire'], { wood: 40, stone: 20, rope: 2 }, { lv: 4, skill: { artisan: 2 } },
-    'Fogata dentro y dos camas. Aquí ya puedes casarte.', '#b89060', '#8a5a30'],
-  ['house_stone', 'Casa de piedra', 3, [4, 3], 2, 40, 1, ['sleep', 'chest', 'kitchen', 'workbench'], { stone: 60, brick: 10, wood: 30 }, { lv: 7, skill: { artisan: 3 } },
-    'Cocina y banco de trabajo propios. Paredes que aguantan un asedio.', '#b0aca0', '#6a6a70'],
-  ['house_brick', 'Casa de ladrillo', 4, [4, 4], 3, 50, 2, ['sleep', 'chest', 'kitchen', 'workbench', 'loom'], { brick: 40, stone: 40, iron_bar: 6 }, { lv: 9, skill: { artisan: 4 } },
-    'Telar y tres camas. La casa de un hombre establecido.', '#c08868', '#8a4a3a'],
-  ['house_manor', 'Casona solariega', 5, [5, 4], 3, 60, 2, ['sleep', 'chest', 'kitchen', 'workbench', 'loom', 'tannery'], { brick: 60, stone: 60, steel_bar: 8, linen: 6 }, { lv: 11, skill: { artisan: 5 } },
-    'Potro de curtir y espacio para una familia grande.', '#c8b898', '#7a5a4a'],
-  ['house_mansion', 'Mansión', 6, [5, 5], 4, 80, 3, ['sleep', 'chest', 'kitchen', 'workbench', 'loom', 'tannery', 'mill'], { stone: 100, brick: 60, steel_bar: 12, gold_bar: 2 }, { lv: 13, skill: { artisan: 6 } },
-    'Molino propio y hasta tres hijos. Ya eres alguien en Vhalor.', '#d8d0c0', '#7a4a6a'],
-  ['house_keep', 'Torreón', 7, [5, 5], 4, 90, 3, ['sleep', 'chest', 'kitchen', 'workbench', 'forge', 'smelter'], { stone: 140, brick: 80, iron_bar: 20, steel_bar: 10 }, { lv: 15, skill: { artisan: 7 } },
-    'Forja y horno de fundición bajo tu propio techo.', '#a8a8a0', '#5a5a62'],
-  ['house_villa', 'Villa del valle', 8, [6, 5], 5, 100, 4, ['sleep', 'chest', 'kitchen', 'workbench', 'forge', 'smelter', 'anvil'], { stone: 160, brick: 100, steel_bar: 20, mithril_bar: 6 }, { lv: 17, skill: { artisan: 8 } },
-    'Yunque propio. Ya no dependes de Dorn para nada.', '#e0d8c8', '#6a7a5a'],
-  ['house_palace', 'Palacete', 9, [6, 6], 6, 120, 4, ['sleep', 'chest', 'kitchen', 'workbench', 'forge', 'smelter', 'anvil', 'fletching'], { stone: 200, brick: 140, mithril_bar: 14, gold_bar: 6, silk: 8 }, { lv: 19, skill: { artisan: 9 } },
-    'Mesa de flechas y seis camas. Tu casa es una institución.', '#e8e0d0', '#7a5a8a'],
-  ['house_citadel', 'Ciudadela privada', 10, [7, 6], 6, 150, 5, ['sleep', 'chest', 'kitchen', 'workbench', 'forge', 'smelter', 'anvil', 'fletching', 'alchemy'], { stone: 260, brick: 180, adamantite_bar: 8, mithril_bar: 20, golem_core: 2 }, { lv: 22, skill: { artisan: 10 } },
-    'Alambique y muros de verdad. Un gólem vigila la puerta.', '#c8c8d0', '#4a5a7a'],
-  ['house_estate', 'Hacienda de Vhalor', 11, [8, 7], 8, 200, 6, ['sleep', 'chest', 'kitchen', 'workbench', 'forge', 'smelter', 'anvil', 'fletching', 'alchemy', 'loom', 'tannery', 'mill'], { stone: 340, brick: 240, adamantite_bar: 16, gold_bar: 12, dragon_scale: 2, silk: 16 }, { lv: 26, skill: { artisan: 10 } },
-    'Todas las estaciones, ocho camas y seis hijos. El sueño de un esclavo.', '#f0e8d8', '#8a6a3a']
+   'Fogata dentro y dos camas. Aquí ya puedes casarte.', '#b89060', '#8a5a30'],
+  ['house_stone', 'Casa de piedra', 3, [4, 3], 2, 40, 1, ['sleep', 'chest', 'campfire', 'workbench'], { stone: 60, brick: 10, wood: 30 }, { lv: 7, skill: { artisan: 3 } },
+   'Banco de trabajo propio: cuero, tela, arcos y muebles sin salir de casa.', '#b0aca0', '#6a6a70'],
+  ['house_brick', 'Casa de ladrillo', 4, [4, 4], 3, 50, 2, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen'], { brick: 40, stone: 40, iron_bar: 6 }, { lv: 9, skill: { artisan: 4 } },
+   'Cocina de verdad y tres camas. La casa de un hombre establecido.', '#c08868', '#8a4a3a'],
+  ['house_manor', 'Casona solariega', 5, [5, 4], 3, 60, 2, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge'], { brick: 60, stone: 60, steel_bar: 8, linen: 6 }, { lv: 11, skill: { artisan: 5 } },
+   'Forja propia: fundes y forjas sin depender del horno público ni de Dorn.', '#c8b898', '#7a5a4a'],
+  ['house_mansion', 'Mansión', 6, [5, 5], 4, 80, 3, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge'], { stone: 100, brick: 60, steel_bar: 12, gold_bar: 2 }, { lv: 13, skill: { artisan: 6 } },
+   'Cuatro camas y hasta tres hijos. Ya eres alguien en Vhalor.', '#d8d0c0', '#7a4a6a'],
+  ['house_keep', 'Torreón', 7, [5, 5], 4, 90, 3, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge', 'alchemy'], { stone: 140, brick: 80, iron_bar: 20, steel_bar: 10 }, { lv: 15, skill: { artisan: 7 } },
+   'Alambique bajo tu propio techo. Pociones sin recargo.', '#a8a8a0', '#5a5a62'],
+  ['house_villa', 'Villa del valle', 8, [6, 5], 5, 100, 4, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge', 'alchemy'], { stone: 160, brick: 100, steel_bar: 20, mithril_bar: 6 }, { lv: 17, skill: { artisan: 8 } },
+   'Las cinco estaciones y cinco camas. Autosuficiencia completa.', '#e0d8c8', '#6a7a5a'],
+  ['house_palace', 'Palacete', 9, [6, 6], 6, 120, 4, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge', 'alchemy'], { stone: 200, brick: 140, mithril_bar: 14, gold_bar: 6, silk: 8 }, { lv: 19, skill: { artisan: 9 } },
+   'Seis camas. Tu casa es una institución.', '#e8e0d0', '#7a5a8a'],
+  ['house_citadel', 'Ciudadela privada', 10, [7, 6], 6, 150, 5, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge', 'alchemy'], { stone: 260, brick: 180, adamantite_bar: 8, mithril_bar: 20, golem_core: 2 }, { lv: 22, skill: { artisan: 10 } },
+   'Muros de verdad. Un gólem vigila la puerta.', '#c8c8d0', '#4a5a7a'],
+  ['house_estate', 'Hacienda de Vhalor', 11, [8, 7], 8, 200, 6, ['sleep', 'chest', 'campfire', 'workbench', 'kitchen', 'forge', 'alchemy'], { stone: 340, brick: 240, adamantite_bar: 16, gold_bar: 12, dragon_scale: 2, silk: 16 }, { lv: 26, skill: { artisan: 10 } },
+   'Ocho camas y seis hijos. El sueño de un esclavo.', '#f0e8d8', '#8a6a3a']
 ];
 HOUSES.forEach(function (h, i) {
   bld(h[0], {
@@ -72,31 +99,20 @@ HOUSES.forEach(function (h, i) {
 });
 
 /* ==========================================================
-3 · ESTACIONES DE CRAFTEO (se colocan en tu parcela)
+3 · ESTACIONES DE CRAFTEO · SOLO 5 (mejora 3)
+   Se desbloquean como una receta más: nivel + puntos de Oficio.
 ========================================================== */
 const STATION_BLD = [
   ['campfire', 'Fogata', [1, 1], ['campfire'], { wood: 5, stone: 3 }, null,
-    'Asa carne y pescado. Consume leña.', '#8a7a6a', '#e07030', 'fire'],
-  ['kitchen', 'Cocina', [2, 2], ['kitchen'], { brick: 12, stone: 20, iron_bar: 3, wood: 10 }, { lv: 3, skill: { artisan: 1 } },
-    'Guisos, panes y tartas que curan y dan vigor.', '#c0a880', '#8a5a3a', 'house'],
+   'Asa carne y pescado, hierve agua y hace carbón vegetal. Consume leña.', '#8a7a6a', '#e07030', 'fire'],
   ['workbench', 'Banco de trabajo', [2, 1], ['workbench'], { wood: 15, stone: 5, flint: 2 }, { lv: 2, skill: { artisan: 1 } },
-    'Herramientas, mochilas, muebles y camas.', '#b09060', '#8a7040', 'bench'],
-  ['mill', 'Molino de mano', [2, 2], ['mill'], { stone: 24, wood: 16, iron_bar: 2 }, { lv: 4, skill: { artisan: 2 } },
-    'Muele grano en harina y prensa semillas en aceite.', '#c8b898', '#7a6a4a', 'bench'],
-  ['tannery', 'Potro de curtir', [2, 2], ['tannery'], { wood: 20, rope: 3, salt: 4 }, { lv: 4, skill: { artisan: 2 } },
-    'Convierte pieles en cuero y cuero endurecido.', '#a88860', '#6a5a3a', 'bench'],
-  ['loom', 'Telar', [2, 2], ['loom'], { wood: 24, thread: 4, flint: 2 }, { lv: 4, skill: { artisan: 2 } },
-    'Teje fibra, lana y lino en tela y vendas.', '#c8b0a0', '#7a5a6a', 'bench'],
-  ['smelter', 'Horno de fundición', [2, 2], ['smelter'], { brick: 30, stone: 40, clay: 12, iron_bar: 4 }, { lv: 5, skill: { artisan: 2 } },
-    'Mineral en lingotes. Devora combustible.', '#908880', '#c05030', 'forge'],
-  ['forge', 'Forja', [2, 2], ['forge'], { stone: 30, brick: 16, iron_bar: 6, coal: 8 }, { lv: 7, skill: { artisan: 3 } },
-    'Espadas, lanzas, mazas y herramientas de metal.', '#908880', '#c05030', 'forge'],
-  ['fletching', 'Mesa de flechas', [2, 1], ['fletching'], { wood: 22, thread: 6, flint: 4, feather: 8 }, { lv: 8, skill: { marks: 2, artisan: 3 } },
-    'Arcos, ballestas y las nueve clases de flecha.', '#b89060', '#6a7a4a', 'bench'],
-  ['anvil', 'Yunque', [2, 2], ['anvil'], { iron_bar: 12, steel_bar: 4, stone: 30, brick: 12 }, { lv: 9, skill: { artisan: 4 } },
-    'Armaduras completas, escudos y bardas.', '#8a8a92', '#5a5a62', 'forge'],
+   'Herramientas, cuero, tela, arcos, flechas, mochilas, camas y muebles. Antes eran cuatro mesas: ahora una.', '#b09060', '#8a7040', 'bench'],
+  ['kitchen', 'Cocina', [2, 2], ['kitchen'], { brick: 12, stone: 20, iron_bar: 3, wood: 10 }, { lv: 3, skill: { artisan: 1 } },
+   'Guisos, panes, tartas, harina y aceite. Antes también hacía falta un molino: ahora no.', '#c0a880', '#8a5a3a', 'house'],
+  ['forge', 'Forja', [2, 2], ['forge'], { stone: 30, brick: 16, iron_bar: 6, coal: 8 }, { lv: 5, skill: { artisan: 2 } },
+   'Funde mineral y forja armas, armaduras y escudos. Antes eran horno, forja y yunque: ahora uno solo.', '#908880', '#c05030', 'forge'],
   ['alchemy', 'Alambique', [2, 2], ['alchemy'], { brick: 20, sand: 16, copper_bar: 6, crystal: 2 }, { lv: 10, skill: { artisan: 5 } },
-    'Pociones, elixires, antídotos y dardos.', '#a8a0b8', '#5a4a7a', 'house']
+   'Pociones, elixires, antídotos, dardos y ungüentos.', '#a8a0b8', '#5a4a7a', 'house']
 ];
 STATION_BLD.forEach(function (s) {
   bld(s[0], {
@@ -115,7 +131,8 @@ bld('coop', { name: 'Gallinero', tier: 0, size: [3, 2], cap: 4, functions: ['liv
 bld('corral', { name: 'Corral', tier: 0, size: [4, 3], cap: 4, functions: ['livestock'], accepts: ['sheep', 'pig', 'nanny', 'goat', 'cow', 'alpaca'],
   cost: { wood: 25, fiber: 15, rope: 2 }, req: { lv: 4 }, desc: 'Aloja 4 animales de producto.',
   wall: '#a08850', roof: '#8a7040', kind: 'pen' });
-bld('barn', { name: 'Granero', tier: 0, size: [5, 4], cap: 8, functions: ['livestock', 'chest'], chest: 40, accepts: ['sheep', 'pig', 'nanny', 'goat', 'cow', 'alpaca', 'chicken', 'duck'],
+bld('barn', { name: 'Granero', tier: 0, size: [5, 4], cap: 8, functions: ['livestock', 'chest'], chest: 40,
+  accepts: ['sheep', 'pig', 'nanny', 'goat', 'cow', 'alpaca', 'chicken', 'duck'],
   cost: { wood: 60, stone: 30, brick: 12, rope: 4 }, req: { lv: 8, skill: { artisan: 3 } }, desc: 'Ocho animales y 40 espacios de almacén.',
   wall: '#b89060', roof: '#8a4a3a', kind: 'house' });
 bld('stable', { name: 'Establo', tier: 0, size: [4, 3], cap: 3, functions: ['mounts'],
@@ -124,18 +141,20 @@ bld('stable', { name: 'Establo', tier: 0, size: [4, 3], cap: 3, functions: ['mou
 bld('chest', { name: 'Cofre', tier: 0, size: [1, 1], chest: 20, functions: ['chest'],
   cost: { wood: 10, iron_bar: 1 }, req: null, desc: '20 espacios de almacén.', wall: '#a07840', roof: '#6a4a20', kind: 'chest' });
 bld('chest_large', { name: 'Arcón herrado', tier: 0, size: [2, 1], chest: 48, functions: ['chest'],
-  cost: { wood: 20, iron_bar: 4, hard_leather: 2 }, req: { lv: 6, skill: { artisan: 2 } }, desc: '48 espacios. Lo que un mercader llamaría respectable.',
+  cost: { wood: 20, iron_bar: 4, hard_leather: 2 }, req: { lv: 6, skill: { artisan: 2 } }, desc: '48 espacios de almacén.',
   wall: '#8a6a3a', roof: '#5a4a2a', kind: 'chest' });
+
 /* Camas colocables: se usan desde la mochila sobre tu parcela */
 [['bed_straw', 'Cama de paja', 1, 0.85, { wood: 4, straw: 6, cloth: 2 }, { lv: 3, skill: { artisan: 1 } }, '#c8b070', '#a08840'],
  ['bed_wood', 'Cama de madera', 2, 1.0, { wood: 8, cloth: 4, rope: 2 }, { lv: 6, skill: { artisan: 2 } }, '#a88860', '#7a5a3a'],
  ['bed_feather', 'Cama de plumas', 3, 1.0, { wood: 8, feather: 12, linen: 4 }, { lv: 10, skill: { artisan: 4 } }, '#d8d0c0', '#8a7a9a'],
- ['bed_noble', 'Lecho noble', 4, 1.0, { wood: 10, silk: 6, pegasus_feather: 4, gold_bar: 2 }, { lv: 16, skill: { artisan: 7 } }, '#e8d8b0', '#7a4a6a']]
+ ['bed_noble', 'Lecho noble', 4, 1.0, { wood: 10, silk: 6, pegasus_feather: 4, gold_bar: 2 }, { lv: 31, skill: { artisan: 8 } }, '#e8d8b0', '#7a4a6a']]
 .forEach(function (b) {
   bld(b[0], { name: b[1], tier: 0, size: [2, 1], beds: 1, bedTier: b[2], heal: b[3], functions: ['sleep'],
     cost: b[4], req: b[5], desc: 'Duerme sin riesgo de emboscada. ' + (b[2] >= 3 ? 'Despiertas con vigor extra.' : ''),
     wall: b[6], roof: b[7], kind: 'bed' });
 });
+
 /* Defensas y guardianes */
 bld('fence', { name: 'Valla', tier: 0, size: [1, 1], blocks: true, functions: [], cost: { wood: 2 }, req: null,
   desc: 'Bloquea el paso de animales y bandidos.', wall: '#9a8050', roof: '#7a6030', kind: 'fence' });
@@ -167,7 +186,7 @@ bld('scarecrow', { name: 'Espantapájaros', tier: 0, size: [1, 1], functions: ['
 ========================================================== */
 D.STALL = {
   name: 'Bandeja del puesto',
-  note: 'Solo lo básico, siempre disponible. Para algo especializado, habla con el comerciante.',
+  note: 'Solo lo básico, siempre disponible. Para algo especializado, habla con el comerciante o usa los talleres públicos de la plaza.',
   sells: ['wood', 'stone', 'fiber', 'hay', 'straw', 'berry', 'apple', 'flatbread', 'bait', 'feed_basic', 'torch', 'bandage_simple'],
   buys: ['wood', 'stone', 'coal', 'fiber', 'hay', 'straw', 'herb', 'hide', 'bone', 'feather', 'manure', 'flint', 'clay', 'sand', 'copper_ore', 'crab_shell'],
   buyMarkup: 1.8, sellMult: 0.6
@@ -229,7 +248,6 @@ function romanceChoices() {
     { t: 'Ver a nuestra familia', act: 'family', when: { rel: 'married' } }
   ];
 }
-/** Construye el árbol de diálogo completo a partir de la personalidad. */
 function mkNpc(id, c) {
   const nodes = {
     root: {
@@ -262,18 +280,23 @@ mkNpc('bareth', {
   talk: ['El trabajo duro forja el carácter… y mi bolsa.',
     'Los cazadores te trajeron medio muerto. Yo te di un techo.',
     'Paga tu deuda y serás libre. Palabra de mercader.',
-    'También acepto objetos. Al ochenta por ciento de su valor, eso sí.'],
+    'También acepto objetos. Al ochenta por ciento de su valor, eso sí.',
+    'Solo te di pico y hacha. Lo demás te lo ganas tú.'],
   shop: { sells: ['flatbread', 'berry', 'pick_stone', 'axe_stone', 'hoe_stone', 'cloth_chest', 'torch', 'bandage_simple', 'bed_roll'],
     buys: ['material', 'crop', 'food', 'unique'] },
   services: ['debt', 'shop'],
   cons: { hate: 'Añade recargos a tu deuda y avisa a los guardias.', love: 'Descuentos y perdona intereses.' },
   hate: 'Bareth escupe al suelo. «Ni se te ocurra acercarte, escoria.»',
   lines: [
-    { when: { slave: true }, t: '«Mi propiedad favorita. Llevas collar, pico y hacha. El reino no te espera: te devora. Tráeme oro y quizá algún día te quite el collar.»' },
+    { when: { slave: true }, t: '«Mi propiedad favorita. Llevas collar, pico y hacha; nada más. El reino no te espera: te devora. Tráeme oro y quizá algún día te quite el collar.»' },
     { t: '«Hombre libre… quién lo diría. Pagaste hasta el último cobre. Respeto eso. ¿Negociamos?»' }
   ],
-  extraChoices: [{ t: '¿Cuánto debo aún?', go: 'debtinfo', when: { slave: true } }],
-  nodes: { debtinfo: { text: [{ t: '«Dos mil de oro al contado, ni una moneda menos. Cada pago lo anoto en mi libro. Los intereses… dependen de cómo me caigas.»' }], choices: [{ t: 'Volver', go: 'root' }] } }
+  extraChoices: [{ t: '¿Cuánto debo aún?', go: 'debtinfo', when: { slave: true } },
+    { t: '¿Cómo empiezo sin nada?', go: 'startinfo', when: { slave: true } }],
+  nodes: {
+    debtinfo: { text: [{ t: '«Dos mil de oro al contado, ni una moneda menos. Cada pago lo anoto en mi libro. Los intereses… dependen de cómo me caigas.»' }], choices: [{ t: 'Volver', go: 'root' }] },
+    startinfo: { text: [{ t: '«Tala y pica. Vende madera y piedra aquí mismo, o en la bandeja del mercado. Si se te rompe el pico, no lo tires: réparationlo con dos piedras y un tronco desde tu mochila. Y en la plaza hay horno y mesa públicos, por si aún no tienes parcela.»' }], choices: [{ t: 'Volver', go: 'root' }] }
+  }
 });
 
 /* --- Voss · intendente --- */
@@ -283,7 +306,8 @@ mkNpc('voss', {
   talk: ['Las tierras del sur y del este están en venta. Cuarenta y cuatro parcelas, para ser exacto.',
     'Cada mes llegan trabajadores nuevos. Los títulos nobiliarios tienen… privilegios.',
     'Un hombre con tierras es un hombre con futuro.',
-    'El Mercader Supremo lleva la Lonja ahora. Yo solo llevo el ganado y los contratos.'],
+    'El Mercader Supremo lleva la Lonja ahora. Yo solo llevo el ganado y los contratos.',
+    'Antes había doce mesas distintas. Ahora son cinco. Bendita simplificación.'],
   shop: { sells: ['animal_chicken', 'animal_duck', 'animal_rabbit', 'animal_sheep', 'animal_pig', 'animal_nanny', 'animal_goat', 'animal_cow', 'animal_alpaca', 'animal_horse',
     'feed_basic', 'feed_good', 'feed_herb', 'hay', 'straw'], buys: ['material', 'animal', 'feed', 'product'] },
   services: ['slaves', 'shop', 'stations'],
@@ -300,17 +324,18 @@ mkNpc('dorn', {
   name: 'Dorn', role: 'Herrero de Vhalor', gender: 'm',
   loves: ['coal', 'iron_bar', 'mithril_ore', 'charcoal'],
   talk: ['El acero no miente: hierro y carbón, fuego y paciencia.',
-    'Fundir es cosa del horno, no de la forja. Trae carbón de sobra.',
+    'Ahora la forja lo hace todo: funde, forja y remacha. Antes eran tres mesas.',
     'Las tierras corruptas guardan adamantita. Pocos vuelven con ella.',
-    'Si no tienes yunque, usa el mío. Cobro el treinta y cinco por ciento, y es un regalo.'],
+    'Si no tienes forja, usa la mía. Cobro el treinta y cinco por ciento, y es un regalo.',
+    'El horno público de la plaza funde gratis, pero tarda. Para prisa, el mío.'],
   shop: { sells: ['coal', 'charcoal', 'pick_copper', 'axe_copper', 'pick_iron', 'axe_iron', 'hoe_iron', 'sword_copper', 'sword_iron', 'sword_steel',
     'spear_iron', 'spear_steel', 'mace_iron', 'mace_steel', 'dagger_iron', 'shield_round_wood', 'shield_round', 'shield_kite',
     'iron_head', 'iron_chest', 'iron_legs', 'steel_head', 'steel_chest', 'steel_legs', 'petarmor_leather', 'petarmor_iron', 'saddle_horse', 'repair_kit', 'whetstone'],
     buys: ['material', 'tool', 'weapon', 'armor', 'shield'] },
   services: ['shop', 'repair', 'stations'],
-  cons: { hate: 'No repara, no vende y no presta el yunque.', love: 'Reparaciones a mitad de precio.' },
+  cons: { hate: 'No repara, no vende y no presta la forja.', love: 'Reparaciones a mitad de precio.' },
   hate: 'Dorn golpea el yunque sin mirarte. «Fuera de mi forja.»',
-  lines: [{ t: '«El yunque no pregunta si llevas collar. Trae hierro, trae carbón, y saldrás de aquí mejor armado que un guardia. Y si prefieres que lo haga yo, también.»' }]
+  lines: [{ t: '«El yunque no pregunta si llevas collar. Trae hierro, trae carbón, y saldrás de aquí mejor armado que un guardia. Y si traes una herramienta rota, la arreglo por menos de lo que cuesta hacerla otra vez.»' }]
 });
 
 /* --- Lía · mercadera (romance) --- */
@@ -320,7 +345,8 @@ mkNpc('lia', {
   talk: ['Vendo de todo: semillas, pan, mochilas… y consejos gratis.',
     'Mi puesto es el mejor surtido de Vhalor, modestia aparte.',
     'Dicen que el Fénix deja plumas que valen una fortuna.',
-    'Las veinticuatro semillas que cultivo caben en esta bandeja. Elige bien según la estación.'],
+    'Las veinticuatro semillas que cultivo caben en esta bandeja. Elige bien según la estación.',
+    'El horno y la mesa de la plaza son del concejo. Úsalos sin miedo.'],
   shop: { sells: ['seed_wheat', 'seed_carrot', 'seed_potato', 'seed_tomato', 'seed_pumpkin', 'seed_onion', 'seed_lettuce', 'seed_garlic',
     'seed_corn', 'seed_cabbage', 'seed_pepper', 'seed_sweetpotato', 'seed_rice', 'seed_quinoa', 'seed_maca', 'seed_sunflower',
     'seed_strawberry', 'seed_grape', 'seed_melon', 'seed_cotton', 'seed_flax', 'seed_herb', 'seed_bean', 'seed_beet',
@@ -370,7 +396,8 @@ mkNpc('maera', {
   talk: ['El Alba bendice a quien trabaja honradamente.',
     'La caridad abre puertas que el oro no puede.',
     'En mi botica hay vendas limpias y antídotos. El veneno de hidra no perdona.',
-    'Incluso un esclavo tiene alma libre. Nunca lo olvides.'],
+    'Incluso un esclavo tiene alma libre. Nunca lo olvides.',
+    'Fuiste encontrado divagando por las tierras de Jotun. Que el Alba guíe tu esfuerzo.'],
   shop: { sells: ['holy_water', 'ring_gold', 'bandage_clean', 'bandage_herb', 'antidote', 'salve_burn', 'splint',
     'potion_heal_s', 'potion_heal_m', 'potion_stamina_s', 'herb_blue', 'herb_fire'], buys: ['material', 'potion', 'heal', 'herbany'] },
   services: ['shop', 'bless', 'charity', 'wedding', 'stations'],
@@ -393,7 +420,8 @@ mkNpc('roderic', {
   talk: ['Las murallas tienen dos puertas y cien ojos. No robes aquí.',
     'Hay contratos para quien sepa manejar el acero… y para quien sepa llenar un granero.',
     'Los bandidos del sur aprietan. El reino paga por cabezas.',
-    'Un escudo bien puesto vale más que una espada bien afilada. Aprende a hacer parry.'],
+    'Un escudo bien puesto vale más que una espada bien afilada. Aprende a hacer parry.',
+    'Cada nivel que subes te hace más duro. Reparte los puntos con cabeza.'],
   shop: { sells: ['iron_chest', 'steel_head', 'shield_round', 'shield_kite', 'shield_tower', 'shield_spiked',
     'arrow_basic', 'arrow_iron', 'arrow_barbed', 'bow_wood', 'bow_hunter', 'quiver', 'potion_heal_s', 'bandage_clean'],
     buys: ['weapon', 'armor', 'shield', 'ammo'] },
@@ -436,43 +464,43 @@ mkNpc('finn', {
 /* --- Granjeros: los 8 con parcela propia y tareas de ayuda --- */
 const FARMERS = [
   ['marta', 'Marta', 'Granjera del este', 'f', true, ['crop_pumpkin', 'pie', 'fert_compost'],
-    ['Mi parcela da calabazas enormes. El compost es el secreto.', 'Si me riegas diez plantas, te lo pago bien.', 'Odo y yo competimos por la mejor hortaliza cada mes.'],
-    'Marta aprieta el azadón. «Ladrón. No te acerques a mis tierras.»',
-    '«¡Hola! ¿Vienes a ayudar, a comprar… o a curiosear mis calabazas?»',
-    'Marta se ríe, con las mejillas coloradas. «Cuidado, que me sonrojas más que el sol del mediodía.»',
-    'Entre los surcos, Marta te muestra su calabaza gigante. Luego te mira a ti, y olvida la calabaza.'],
+   ['Mi parcela da calabazas enormes. El compost es el secreto.', 'Si me riegas diez plantas, te lo pago bien.', 'Odo y yo competimos por la mejor hortaliza cada mes.'],
+   'Marta aprieta el azadón. «Ladrón. No te acerques a mis tierras.»',
+   '«¡Hola! ¿Vienes a ayudar, a comprar… o a curiosear mis calabazas?»',
+   'Marta se ríe, con las mejillas coloradas. «Cuidado, que me sonrojas más que el sol del mediodía.»',
+   'Entre los surcos, Marta te muestra su calabaza gigante. Luego te mira a ti, y olvida la calabaza.'],
   ['odo', 'Odo', 'Granjero del este', 'm', false, ['hearty_stew', 'feed_golden', 'fert_bonemeal'],
-    ['Marta dice que sus calabazas son mejores. Mentira.', 'Un buen estiércol vale más que un buen consejo.', 'Si veo a alguien robando en mi parcela… lo sabrá el capitán.'],
-    'Odo escupe. «Ladrón de hortalizas. Largo de aquí.»',
-    '«¿Eh? Ah, tú. Si vienes a ayudar, bien. Si vienes a robar… ya sabes lo que pasa.»'],
+   ['Marta dice que sus calabazas son mejores. Mentira.', 'Un buen estiércol vale más que un buen consejo.', 'Si veo a alguien robando en mi parcela… lo sabrá el capitán.'],
+   'Odo escupe. «Ladrón de hortalizas. Largo de aquí.»',
+   '«¿Eh? Ah, tú. Si vienes a ayudar, bien. Si vienes a robar… ya sabes lo que pasa.»'],
   ['helga', 'Helga', 'Granjera del norte', 'f', false, ['crop_beet', 'cheese', 'butter'],
-    ['La remolacha del norte es más dulce. Es el frío.', 'Necesito manos para cosechar antes de la lluvia.', 'Mis vacas dan mejor leche que las de nadie.'],
-    'Helga cierra el portón. «Fuera de mi campo.»',
-    '«Bienvenido a la granja del norte. Hay trabajo si tienes espalda.»'],
+   ['La remolacha del norte es más dulce. Es el frío.', 'Necesito manos para cosechar antes de la lluvia.', 'Mis vacas dan mejor leche que las de nadie.'],
+   'Helga cierra el portón. «Fuera de mi campo.»',
+   '«Bienvenido a la granja del norte. Hay trabajo si tienes espalda.»'],
   ['tomas', 'Tomás', 'Granjero del molino', 'm', false, ['flour', 'bread', 'corn_bread'],
-    ['Muelo el grano de media Vhalor. Trae trigo y te lo cambio por harina.', 'El molino no para nunca. Yo tampoco, casi.', 'Sin harina no hay pan. Sin pan no hay ejército.'],
-    'Tomás apaga el molino. «No muelo para ladrones.»',
-    '«¿Traes grano? Entonces habla. Si no, aparta que tengo trabajo.»'],
+   ['Muelo el grano en la cocina del pueblo. Ya no hace falta un molino aparte.', 'Trae trigo y te lo cambio por harina.', 'Sin harina no hay pan. Sin pan no hay ejército.'],
+   'Tomás apaga el fuego. «No muelo para ladrones.»',
+   '«¿Traes grano? Entonces habla. Si no, aparta que tengo trabajo.»'],
   ['mira', 'Mira', 'Granjera del arrozal', 'f', true, ['rice_bowl', 'fish_trout', 'herb_tea'],
-    ['El arroz quiere agua y paciencia. Como todo lo bueno.', 'El arrozal se inunda solo si llueve. Si no, hay que regarlo a mano.', 'Cocino el mejor cuenco de arroz del valle.'],
-    'Mira levanta el rastrillo. «Largo de mi arrozal.»',
-    '«El agua está alta hoy. Buen día para plantar… o para ayudar.»',
-    'Mira se aparta el pelo mojado y sonríe. «No debería alegrarme tanto verte.»',
-    'Cenáis arroz junto al arrozal, con los pies en el agua. Mira no habla, y no hace falta.'],
-  ['gunnar', 'Gunnar', 'Granjero de la tundra', 'm', false, ['crop_maca', 'maca_porridge', 'reindeer'],
-    ['Aquí arriba solo crece la maca. Y crece bien.', 'Los renos se comen la cosecha si no la vigilas.', 'El frío conserva la carne mejor que la sal.'],
-    'Gunnar silba a sus renos. «Se sueltan si vuelves.»',
-    '«Poco grano, mucha raíz. Así se come en la tundra. ¿Ayudas?»'],
+   ['El arroz quiere agua y paciencia. Como todo lo bueno.', 'El arrozal se inunda solo si llueve. Si no, hay que regarlo a mano.', 'Cocino el mejor cuenco de arroz del valle.'],
+   'Mira levanta el rastrillo. «Largo de mi arrozal.»',
+   '«El agua está alta hoy. Buen día para plantar… o para ayudar.»',
+   'Mira se aparta el pelo mojado y sonríe. «No debería alegrarme tanto verte.»',
+   'Cenáis arroz junto al arrozal, con los pies en el agua. Mira no habla, y no hace falta.'],
+  ['gunnar', 'Gunnar', 'Granjero de la tundra', 'm', false, ['crop_maca', 'maca_porridge', 'saddle_reindeer'],
+   ['Aquí arriba solo crece la maca. Y crece bien.', 'Los renos se comen la cosecha si no la vigilas.', 'El frío conserva la carne mejor que la sal.'],
+   'Gunnar silba a sus renos. «Se sueltan si vuelves.»',
+   '«Poco grano, mucha raíz. Así se come en la tundra. ¿Ayudas?»'],
   ['yara', 'Yara', 'Granjera del oasis', 'f', true, ['crop_melon', 'crop_grape', 'cider'],
-    ['El melón del oasis no tiene rival. Es el agua del desierto.', 'Riego dos veces al día. Sin eso, aquí no crece nada.', 'Mis uvas hacen el vino que bebe Silas.'],
-    'Yara tapa el pozo. «Ni una gota para ti.»',
-    '«El oasis da para todos… si todos ayudan. ¿Traes brazos?»',
-    'Yara te ofrece un gajo de melón. «Cuidado. Es una excusa para que te quedes.»',
-    'Bajo la palmera, Yara comparte el melón y el silencio. El desierto puede ser amable.'],
+   ['El melón del oasis no tiene rival. Es el agua del desierto.', 'Riego dos veces al día. Sin eso, aquí no crece nada.', 'Mis uvas hacen el vino que bebe Silas.'],
+   'Yara tapa el pozo. «Ni una gota para ti.»',
+   '«El oasis da para todos… si todos ayudan. ¿Traes brazos?»',
+   'Yara te ofrece un gajo de melón. «Cuidado. Es una excusa para que te quedes.»',
+   'Bajo la palmera, Yara comparte el melón y el silencio. El desierto puede ser amable.'],
   ['bram', 'Bram', 'Granjero del linar', 'm', false, ['crop_flax', 'linen', 'cloth'],
-    ['El lino da tela y aceite. Nada se pierde.', 'Sin telar no hay vendas. Sin vendas no hay heridas cerradas.', 'Mi lino viste a media ciudad.'],
-    'Bram escupe. «Mis linos no son tu almacén.»',
-    '«Lino, aceite y tela. Eso sale de aquí. ¿Vienes a echar una mano?»']
+   ['El lino da tela y aceite. Nada se pierde.', 'Sin tela no hay vendas. Sin vendas no hay heridas cerradas.', 'Mi lino viste a media ciudad.'],
+   'Bram escupe. «Mis linos no son tu almacén.»',
+   '«Lino, aceite y tela. Eso sale de aquí. ¿Vienes a echar una mano?»']
 ];
 FARMERS.forEach(function (f) {
   const isRom = f[4];
@@ -517,7 +545,8 @@ mkNpc('gunda', {
   talk: ['Dieciocho de oro por una cama bajo techo. Sin bandidos, sin lluvia.',
     'No es tu casa: duermes peor y despiertas con menos vida. Pero despiertas.',
     'Si quieres descansar de verdad, cómprate un petate o construye una cama.',
-    'A los esclavos les alquilo igual. El oro no lleva collar.'],
+    'A los esclavos les alquilo igual. El oro no lleva collar.',
+    'El petate se hace a mano, con paja y cuerda. No necesitas mesa para eso.'],
   shop: { sells: ['bread', 'cheese', 'ale', 'mead', 'stew', 'porridge', 'boiled_egg', 'herb_tea', 'bed_roll'],
     buys: ['food', 'crop', 'fish'], buyMult: { food: 1.1 } },
   services: ['bed_market', 'shop'],
@@ -532,8 +561,9 @@ mkNpc('rurik', {
   loves: ['arrow_barbed', 'dried_meat', 'warg_fang'],
   talk: ['Los lobos cazan en manada. Los ciervos huyen. Así funciona el mundo.',
     'Si te acercas a un jabalí por detrás, te cobrará el atrevimiento.',
-    'Vendo pieles y flechas. compro colmillos.',
-    'Cuidado con el Risco: la mantícora dispara púas antes de saltar.'],
+    'Vendo pieles y flechas. Compro colmillos.',
+    'Cuidado con el Risco: la mantícora dispara púas antes de saltar.',
+    'Las bestias atacan en ráfagas y descansan. Ese descanso es tu ventana.'],
   shop: { sells: ['bow_wood', 'bow_hunter', 'arrow_basic', 'arrow_iron', 'arrow_barbed', 'arrow_tame', 'quiver',
     'dried_meat', 'traveler_ration', 'hide', 'leather', 'dart_narcotic', 'gloves_grip'],
     buys: ['hide', 'leather', 'bone', 'feather', 'material', 'unique', 'ammo'], buyMult: { hide: 1.3, leather: 1.2 } },
@@ -544,7 +574,7 @@ mkNpc('rurik', {
 });
 mkNpc('skadi', {
   name: 'Skadi', role: 'Cazadora de la tundra', gender: 'f', romance: true, wanderer: true, hunter: true, post: false,
-  loves: ['fish_ice', 'arrow_ice', 'polar_bear', 'frost_core'],
+  loves: ['fish_ice', 'arrow_ice', 'saddle_polar_bear', 'frost_core'],
   talk: ['El oso polar te oye antes de verte. Ve por detrás.',
     'Las flechas gélidas ralentizan. Contra un wyvern, eso es la vida.',
     'Tamear un huargo necesita dardos y carne. Y paciencia.',
@@ -556,7 +586,7 @@ mkNpc('skadi', {
   cons: { hate: 'Te marca como presa.', love: 'Comparte rutas de caza y descuentos.' },
   hate: 'Skadi no baja el arco. «Un paso más y cazamos otra cosa.»',
   lines: [
-    { when: { rel: 'dating' }, t: 'Skadi baja el arco al verte. «Vaya. Mi mejor presa resultó ser voluntary.»' },
+    { when: { rel: 'dating' }, t: 'Skadi baja el arco al verte. «Vaya. Mi mejor presa resultó ser voluntaria.»' },
     { t: '«Cazadora de la tundra. Pieles, hielo y flechas. ¿Qué necesitas?»' }
   ],
   flirt: 'Skadi ladea la cabeza. «Coquetear con quien tiene el arco tensado. Valiente. Me gusta.»',
@@ -606,7 +636,7 @@ mkNpc('herbalist', {
 });
 
 /* ==========================================================
-7 · CONTRATOS (caza, recolección y ayuda)
+7 · CONTRATOS (caza y recolección)
 ========================================================== */
 function hunt(id, name, target, count, reward, trust, when) {
   quest({ id: id, kind: 'hunt', name: name, target: target, count: count, reward: reward, trust: trust, when: when || {} });
@@ -655,63 +685,59 @@ D.NAMES.female = ['Aria', 'Brenna', 'Celia', 'Daria', 'Elara', 'Fiora', 'Gwen', 
   'Una', 'Vesna', 'Wren', 'Ysolde', 'Astrid', 'Brynhild', 'Dagny', 'Eir', 'Freydis', 'Sigrid'];
 
 [
-  'Tala y pica: vende madera y piedra a Bareth o Lía para pagar tu deuda de 2.000 oro.',
-  'El nivel global sube con todo lo que haces. Cada nivel da un punto de habilidad; cada cinco, uno extra.',
-  'A mano solo atas cuerda, enciendes antorcha, vendas simples y sacas semillas. Lo demás pide estación.',
-  'Fundir mineral requiere horno de fundición y mucho combustible: carbón rinde 4, carbón vegetal 6.',
-  'Mantén el botón de ataque para tensar el arco. Soltar antes de tiempo dispara flojo.',
-  'El escudo bloquea manteniendo el botón. Los primeros 0,22 s son parry: devuelves el golpe y aturdes.',
-  'Puedes bloquear y esquivar en mitad de un ataque. El combate ya no se queda bloqueado.',
-  'Tab cambia de objetivo. El apuntado se queda pegado al enemigo y no lo suelta al acercarte.',
-  'Los carnívoros cazan herbívoros. Aprovéchalo: un lobo ocupado con un ciervo no te ve.',
-  'Cada criatura mítica nace solo en su santuario. El grifo, en el Nido del Grifo, y no sale de allí.',
+  'Empiezas solo con pico y hacha de piedra. Tala y pica, y vende madera y piedra para pagar tu deuda.',
+  'En la plaza de Vhalor hay horno público y mesa pública: úsalos desde el primer día, sin construir nada.',
+  'El horno público es lento: unos segundos entre usos y más leña. El tuyo propio no tiene esa espera.',
+  'Una herramienta rota NO desaparece: queda en la mochila como rota y se repara con muy pocos materiales.',
+  'Solo hay cinco mesas: fogata, banco, cocina, forja y alambique. Cada una se desbloquea con nivel y Oficio.',
+  'Las recetas se reparten en tres tiers: nivel 1–10, 11–30 y 31–40. Sube de nivel para abrir los siguientes.',
+  'Cada nivel da un punto de habilidad y un punto de saber. El saber aprende una familia entera de recetas.',
+  'Subir de nivel también mejora tus estadísticas base: más vida, más stamina y algo de defensa.',
+  'A mano, sin mesa: pico, hacha y azada de piedra, caña y arco de madera, flechas caseras, cuerda, antorcha, venda y petate.',
+  'Mantén el botón de ataque para tensar el arco; arrastra el dedo para apuntar y suelta para disparar.',
+  'El escudo bloquea manteniendo el botón. Los primeros instantes son parry: devuelves el golpe y aturdes.',
+  'Tab cambia de objetivo. El apuntado se queda pegado al enemigo aunque te pegues a él.',
   'Las bestias atacan en ráfagas y luego descansan. Ese descanso es tu ventana.',
-  'La comida da saciedad, salud y energía según tamaño, preparación y rareza. Un banquete cura 70.',
-  'Cocinar consume leña. Sin combustible no hay guiso, por muchos ingredientes que tengas.',
-  'Las tareas de ayuda en granjas vecinas piden regar o cosechar un número concreto. Pagan oro y confianza.',
-  'El petate te deja dormir donde sea, pero hay un 34 % de emboscada. La posada cuesta 18 oro y es segura.',
+  'Cocinar y fundir consumen leña: madera 1, carbón 4, carbón vegetal 6.',
+  'Las tareas de ayuda en granjas vecinas pagan oro y confianza. Tienes dos días de plazo.',
+  'El petate se hace a mano y te deja dormir donde sea, con riesgo de emboscada. La posada cuesta 18 oro.',
   'El Mercader Supremo vende las 44 parcelas. Necesitas una escritura de 120 oro por cada compra.',
-  'Las vendas cortan el sangrado. El ungüento apaga el fuego. El antídoto limpia el veneno.',
   'Afinidad 3 desbloquea monturas terrestres; 7, voladoras; 9, compañeros míticos.',
-  'Los cazadores y mercaderes errantes se mueven por los caminos. Búscalos: llevan lo que nadie tiene.',
-  'El gólem y la gárgola protegen tus construcciones. Cuestan núcleos, pero no duermen.',
   'Robar tiene testigos. Si te ven, la confianza cae y la guardia te busca.',
   'Edita los controles en Ajustes: posición, tamaño y opacidad. El juego se juega en horizontal.'
 ].forEach(DEF.tip);
 
-/* --- Ayuda: cada sistema nuevo, explicado con números reales --- */
 const H = DEF.help;
-H('Controles', 'Joystick izquierdo o WASD para moverte; el stick es analógico, así que puedes andar despacio o correr según cuánto lo inclines. Espacio o el botón grande ataca y usa la herramienta. E interactúa. Q esquiva. F monta o despega. L o el botón derecho bloquea con el escudo. Tab cambia de objetivo. X cambia el tipo de flecha. Shift corre. Los números 1 a 5 usan la barra rápida. I inventario, C crafteo, B construir, M mapa, R relaciones, H habilidades, Esc pausa.', 'compass');
-H('Jugar en horizontal', 'Vhalor se juega en horizontal. Si giras el teléfono a vertical, el juego se pausa y te pide volver a girar. En Ajustes puedes entrar en pantalla completa e intentar el bloqueo de orientación. También puedes mover y redimensionar cada grupo de controles (joystick, acciones, barra rápida, menú, placa y mapa) y cambiar su opacidad o intercambiarlos de lado para jugar con la mano izquierda.', 'settings');
-H('La deuda y la libertad', 'Empiezas esclavo con 2.000 de oro de deuda y un collar. Vende recursos a Bareth, Lía o los puestos, o entrega objetos directamente por el 80 % de su valor. Al llegar a cero eres libre: puedes comprar tierras, abrir cuenta en el banco, contratar trabajadores y casarte.', 'debt');
-H('Supervivencia', 'Tienes salud, stamina y saciedad. La saciedad baja un punto cada 7 segundos; a cero pierdes 1,8 de vida por segundo. Con menos de 18 de saciedad la stamina no regenera y te mueves más despacio. Con más de 55 regeneras vida poco a poco. Caer no mata: despiertas con penalización de oro o materiales.', 'heart');
-H('Comer bien', 'Cada alimento aporta saciedad, salud y energía según su tamaño (de bocado a banquete), su preparación (crudo, simple, asado, refinado, maestro) y su rareza. Las bayas apenas sacian; un guiso del cazador cura 34 y da 30 de energía; el banquete de Vhalor cura 70, da 60 de energía y un beneficio de 7 minutos. La carne cruda resta vida: cocínala.', 'food');
-H('Combate cuerpo a cuerpo', 'El ataque tiene tres fases: preparación, golpe y recuperación. Puedes encadenar cuatro golpes con multiplicadores 1, 1,14, 1,34 y 1,62 si atacas dentro de 0,85 s. Desde la ventana de cancelación (0,13 s) puedes bloquear o esquivar sin esperar a terminar. Mantener el ataque con Fuerza 2 carga un golpe pesado de 2,1×. Las mazas y martillos rompen guardias.', 'sword');
-H('Escudo, bloqueo y parry', 'Equipar un escudo añade el botón de bloqueo. Mantenerlo reduce el daño según el escudo: broquel 48 %, redondo 62 %, cometa 72 %, pavés 86 %. Bloquear consume stamina por golpe. Los primeros 0,22 s son parry: solo recibes el 10 % del daño, recuperas 8 de stamina y el atacante queda aturdido 1,15 s, listo para tu contraataque. Con Guardia 5 el embate de escudo aturde; con Guardia 8 devuelves proyectiles.', 'shield');
-H('Arcos, ballestas y flechas', 'Mantén el ataque para tensar: a los 0,22 s sueltas un tiro flojo (45 % de daño) y a los 0,85 s uno pleno (135 %). Las ballestas tardan más pero pegan mucho más fuerte y usan virotes. Hay nueve municiones: básica, pesada, ígnea (quema), gélida (ralentiza), veneno, dentada (sangra), somnífera (no mata: adormece para tamear), virote y mithril (atraviesa dos enemigos). X cicla la munición disponible.', 'bow');
-H('Apuntado', 'El apuntado es pegajoso: fija un objetivo y lo mantiene mientras siga en el cono y el alcance, aunque te pegues a él. De cerca el cono se abre hasta 1,25 radianes, así que nunca pegas al aire por estar demasiado cerca. Si hay varios enemigos, solo cambia de objetivo cuando otro es claramente mejor (margen 0,34) o cuando pulsas Tab. En Ajustes puedes subir o bajar la asistencia de apuntado.', 'target');
-H('Esquiva', 'Q rueda 0,34 s con 0,28 s de invulnerabilidad y 8,4 de velocidad. Cuesta 13 de stamina y se reutiliza cada 0,85 s. Con Agilidad 3 giras en el sitio sin perder impulso y con Agilidad 6 la esquiva habilita un contraataque.', 'roll');
-H('Nivel y habilidades', 'Todo suma experiencia: talar, picar, pescar, cultivar, cocinar, fabricar, tamear, ayudar y matar. El nivel global llega hasta 40 y da un punto de habilidad por nivel, más uno extra cada cinco. Las ocho ramas son Fuerza, Vigor, Aguante, Agilidad, Puntería, Guardia, Afinidad y Oficio. Cada rama tiene diez puntos y desbloqueos concretos en niveles 2, 3, 4, 5, 6, 7, 8, 9 y 10. Abre el panel con H.', 'xp');
-H('Estaciones de crafteo', 'A mano, sin mesa ni nivel, puedes hacer pico, hacha y azada de piedra, caña y arco de madera, flechas caseras, aguja, piedra de afilar, cuerda, antorchas, vendas simples, cebo, pienso básico, estiércol y sacar semillas. Todo lo demás exige una estación colocada en tu parcela o prestada por un mercader: fogata, cocina, molino, potro, telar, horno de fundición, forja, yunque, mesa de flechas, banco de trabajo y alambique. Cada estación se desbloquea con nivel y puntos de Oficio.', 'craft');
-H('Combustible', 'Cocinar, fundir, forjar y destilar consumen combustible de tu mochila: la madera rinde 1, el carbón 4 y el carbón vegetal 6. Fundir pide 3 unidades base más el coste de la receta; un lingote de adamantita necesita mucho carbón. Oficio reduce el gasto un 4,5 % por punto. Sin combustible la receta aparece bloqueada aunque tengas los materiales.', 'fire');
-H('Fundición y metales', 'El mineral no se convierte en lingote a mano: necesitas el horno de fundición (nivel 5, Oficio 2). Cobre, hierro, mithril y adamantita salen de sus vetas; el acero se hace con hierro y carbón; la obsidiana pulida, con obsidiana y carbón. Dorn presta su horno, forja y yunque por un 35 % de recargo si aún no tienes los tuyos.', 'material');
-H('Granja', 'Compra una parcela al Mercader Supremo, ara con azada, siembra, riega y fertiliza. Hay 24 cultivos con ciclos de 2 a 4 días. Regar multiplica el crecimiento por 1,35; el fertilizante dorado por 1,7 y produce cosechas de tres estrellas que se venden hasta el triple. La hoz cosecha en área 2×2. El espantapájaros mantiene a los herbívoros salvajes fuera de tus sembrados.', 'role_farm');
-H('Ayudar en granjas vecinas', 'Ocho granjeros tienen parcela propia: Marta, Odo, Helga, Tomás, Mira, Gunnar, Yara y Bram. Habla con ellos y pide trabajo: te asignarán una tarea concreta (regar de 6 a 10 plantas, cosechar de 4 a 7, sembrar de 5 a 9 o alimentar de 2 a 4 animales) con dos días de plazo. Al completarla vuelves y cobras oro, confianza y experiencia. Cada granjero da una tarea al día.', 'quest');
-H('Ganado', 'Compra animales en la Intendencia y colócalos desde la mochila: gallinero para gallinas, patos y conejos; corral y granero para ovejas, cabras, cerdos, vacas y alpacas; establo para monturas. Aliméntalos con pienso para que produzcan: huevo, leche, lana, trufa y estiércol. La calidad del pienso decide la calidad del producto.', 'role_tend');
-H('Tameo', 'Tres métodos. Por comida: acerca el alimento adecuado a una cría o a un animal dócil y repite hasta completar la barra. Por sedación: baja su vida del 55 %, dispara un dardo narcótico o una flecha somnífera y aliméntalo mientras duerme 34 s. Por vínculo: unicornio, kirin y pegaso exigen acercarte despacio, sin atacar, y ganar su calma. El número de comidas sube con el nivel del animal y baja con tu Afinidad.', 'tame');
-H('Monturas', 'Una montura necesita ser adulta, estar tameada y llevar su silla. Afinidad 3 desbloquea las terrestres (caballo, camello, reno, llama), 5 las grandes (bisonte, oso, huargo), 7 las voladoras (grifo, cóndor) y 9 las míticas (unicornio, kirin, pegaso). F monta y desmonta; con una montura voladora, Q despega y aterriza. Volar consume aliento y está prohibido dentro de las murallas.', 'mount');
-H('Ecología salvaje', 'Cada especie tiene dieta y facción. Los carnívoros y omnívoros cazan herbívoros e insectívoros; las presas huyen de sus depredadores. El director de aparición separa los grupos al menos 8 tiles y mantiene 18 tiles entre depredadores y presas, así que nunca verás un montón de animales mezclados. Las manadas de herbívoros van juntas; los depredadores, en parejas.', 'tame');
-H('Santuarios míticos', 'Diez zonas únicas reparten la fauna mítica: Nido del Grifo, Ciénaga de la Hidra, Caldera del Fénix, Fortaleza del Rey Troll, Claro del Unicornio, Risco del Wyvern, Túmulo del Sabueso, Trono de Escarcha, Falla del Dragón y Lago Espejo. Cada criatura mítica nace solo en su santuario y no lo abandona: si huyes de su territorio, deja de perseguirte. Activa el resaltado de zonas en Ajustes para verlas en el mapa.', 'compass');
-H('Jefes y patrones', 'Las bestias atacan en ráfagas de uno a tres golpes y después descansan entre 1,1 y 2,6 segundos: ese descanso es tu ventana. Solo los espíritus de ascua y los fuegos fatuos acosan sin pausa, y pegan flojo. Los seis jefes cambian de patrón por fases según su vida: el Rey Troll invoca trolls, la Hidra se regenera, el Fénix renace una vez, Fenrir llama sabuesos, el Jotun congela el suelo y el Dragón abre cuatro fases con meteoros.', 'boss');
-H('Dormir y camas', 'Tres opciones. El petate enrollado (receta inicial de banco) te deja dormir donde estés, pero a la intemperie hay un 34 % de emboscada y solo recuperas el 72 %. La posada de Gunda cuesta 18 oro, es segura, restaura el 82 % y te deja un 10 % menos de vida máxima hasta el día siguiente. En tu propia casa, una cama colocada restaura todo sin riesgo; las de plumas y el lecho noble despiertan con stamina y vida extra.', 'bed');
-H('Curas y estados', 'El sangrado hace 2,4 de daño por segundo durante 7 s y se corta con cualquier venda. El veneno dura 7 s y se limpia con antídoto, agua bendita o infusión. El fuego dura 4,5 s y se apaga con ungüento para quemaduras. La ralentización se quita con férula o bálsamo de escarcha. Las pociones van de 40 a 180 de vida; los elixires regeneran durante un minuto. Aplicar una venda lleva entre 0,9 y 1,6 s: no lo hagas delante de un jefe.', 'potion');
-H('Tierras y Mercader Supremo', 'El mundo tiene 44 parcelas de seis tamaños, desde 6×6 hasta 20×16. Las vende el Mercader Supremo en la Lonja de Tierras: necesitas una escritura (120 oro, o fabricada con lino y oro) y el precio de la parcela, que sube un 7 % por cada una que ya posees. Los títulos llegan con la cantidad: Colono, Terrateniente, Señor de Tierras, Noble Menor, Noble Mayor y Gran Señor de Vhalor, que permite cinco trabajadores.', 'parcel');
-H('NPC por el mundo', 'Además de los diez vecinos de Vhalor y los ocho granjeros, hay gente en los caminos. Rurik y Skadi son cazadores errantes: cazan animales de verdad y venden pieles y flechas. El buhonero, el contrabandista y el herbolario son mercaderes ambulantes con mercancía que no llega al mercado. Los bandidos montan campamentos y atacan a quien pasa. Todos se mueven: búscalos.', 'social');
-H('Guardianes y defensa', 'El pilón de gólem (nivel 14, Oficio 6) invoca un gólem de piedra que protege tus construcciones y ataca a los hostiles. La repisa de gárgola (nivel 12) pone una gárgola que monta guardia de noche. La torre de vigilancia contrata un guardia. Vallas, empalizadas y muros de piedra bloquean el paso; la puerta de madera deja pasar a los tuyos. En el Claro y el Túmulo, los guardianes protegen su santuario y te atacarán a ti.', 'shield');
-H('Economía y banco', 'Cada comerciante compra mejor lo suyo: Finn paga el pescado un 25 % más, los granjeros la cosecha un 15 %, Rurik las pieles un 30 %. El banco de Silas da un 0,5 % diario hasta 14 monedas y el oro depositado nunca se pierde al caer. La confianza alta da descuentos al comprar y bonus al vender; el odio congela cuentas y cierra puertas.', 'bank');
-H('Familia', 'Sube la confianza de un NPC del género opuesto a 80, coquetea, ten citas y propón matrimonio con dos anillos de oro. Necesitas una casa con al menos dos camas. Maera celebra la boda por 50 oro. Los hijos nacen a los cinco días, crecen en tres etapas y de adolescentes pueden trabajar en la granja, cuidar el ganado o seguirte combatiendo.', 'family');
-H('Robo y consecuencias', 'Cosechar en parcela ajena es robar. Si un NPC o guardia te ve a menos de 9 tiles y con línea de visión, pierdes 30 de confianza y sube tu busca. Sin testigos, solo 8. Con 40 de busca la guardia te persigue; con odio extremo, Silas congela tu cuenta, Bareth añade recargos y Roderic te multa.', 'warning');
-H('Rendimiento', 'El mundo es de 512×512 tiles y se dibuja por chunks de 16×16 con caché LRU y precarga de un chunk por fotograma, así que explorar no da tirones. La calidad de partículas y la resolución interna se ajustan solas según los FPS. F3 muestra el panel de rendimiento. Todo el arte es procedural: no se descarga ninguna imagen.', 'settings');
+H('Tu historia', 'Fuiste encontrado divagando por las tierras de Jotun, fuiste capturado por los cazadores y te trajeron aquí. Empiezas como esclavo y tu destino depende de tu esfuerzo. Bareth te dio un collar, un pico y un hacha de piedra; nada más. Debes 2.000 de oro. Paga y serás libre para comprar tierras, abrir cuenta, contratar trabajadores y formar una familia.', 'debt');
+H('Inventario inicial', 'Solo recibes pico y hacha de piedra. Sin armadura, sin escudo, sin arco, sin comida. Todo lo demás lo fabricas o lo compras. La ropa de tela, el arco de madera y las flechas caseras se hacen a mano en cuanto juntas madera, fibra y sílex.', 'bag');
+H('Herramientas rotas y reparación', 'Cuando la durabilidad llega a cero, la herramienta NO desaparece: queda en tu inventario marcada como rota y deja de funcionar. Selecciónala y pulsa Reparar: cuesta una fracción de los materiales de su receta (por ejemplo, el pico de piedra se arregla con 1 piedra y 1 madera). Así no tienes que fabricar la misma herramienta una y otra vez. Dorn también repara tu equipo equipado por oro.', 'craft');
+H('Talleres públicos del mercado', 'En la plaza de Vhalor hay dos talleres del concejo, gratuitos y disponibles desde el minuto uno: el HORNO PÚBLICO (funde mineral y forja lo básico) y la MESA PÚBLICA (cuero, tela, arcos, flechas, mochilas). La contrapartida: el horno tarda unos 8 segundos en recobrar el fuego entre usos y gasta una unidad extra de combustible; la mesa espera unos 3 segundos. Ninguno produce piezas de calidad. Cuando construyas los tuyos, no habrá espera ni recargo.', 'fire');
+H('Cinco mesas, no doce', 'Solo existen cinco estaciones construibles: FOGATA (asar, hervir, carbón), BANCO DE TRABAJO (herramientas, cuero, tela, arcos, flechas, mochilas, camas), COCINA (guisos, panes, harina, aceite), FORJA (fundir, armas, armaduras, escudos) y ALAMBIQUE (pociones, antídotos, dardos). El antiguo horno, yunque, telar, potro, molino y mesa de flechas se han fusionado en estas cinco. Cada una se desbloquea como una receta más: nivel más puntos de Oficio.', 'build');
+H('Nivel y estadísticas', 'Todo suma experiencia: talar, picar, pescar, cultivar, cocinar, fabricar, tamear, ayudar y combatir. Cada nivel sube tu vida máxima, tu stamina y algo de defensa, además de darte un punto de habilidad (más uno extra cada cinco niveles) y un punto de saber. El nivel máximo es 40.', 'level');
+H('Tiers de recetas', 'Las recetas se reparten en tres tiers según el nivel que exigen: TIER 1 del nivel 1 al 10 (supervivencia, piedra, cobre, cuero, tela, comida sencilla), TIER 2 del 11 al 30 (hierro, acero, mithril, adamantita, alquimia, platos refinados) y TIER 3 del 31 al 40 (maestría de jefe: legendarios, lecho noble, banquete). No puedes fabricar una receta de un tier superior al tuyo aunque tengas los materiales.', 'grid');
+H('Saberes: elegir qué aprender', 'Cada nivel da un punto de saber. En el panel Recetario eliges qué familia de recetas aprendes: Fundición y forja, Oficio de banco, Cocina de campaña, Campo y granja, Alquimia (tier 2) y Maestría mayor (tier 3). Las recetas sin saber (todo lo hecho a mano y lo básico de fogata) las conoces desde el principio. Aprender un saber desbloquea todas sus recetas de tu tier.', 'book');
+H('Habilidades', 'Las ocho ramas son Fuerza, Vigor, Aguante, Agilidad, Puntería, Guardia, Afinidad y Oficio. Cada rama tiene diez puntos y desbloqueos concretos en niveles 2, 3, 4, 5, 6, 7, 8, 9 y 10. Abre el panel con H. Puedes reiniciar el reparto por oro si te equivocas.', 'points');
+H('Controles', 'Joystick izquierdo o WASD para moverte; el stick es analógico: andar despacio o correr según cuánto lo inclines. Espacio o el botón grande ataca y usa la herramienta; con arco, mantén para tensar, arrastra para apuntar y suelta para disparar. E interactúa. Q esquiva. F monta o despega. L o el botón derecho bloquea con el escudo. Tab cambia de objetivo. X cambia la flecha. Shift corre. 1–5 barra rápida. I inventario, C crafteo, J recetario, B construir, M mapa, R relaciones, H habilidades, O controles, Esc pausa.', 'compass');
+H('Jugar en horizontal', 'Vhalor se juega en horizontal. Si giras el teléfono a vertical, el juego se pausa y te pide volver a girar. En Ajustes puedes entrar en pantalla completa y mover, redimensionar y cambiar la opacidad de cada grupo de controles, o intercambiarlos de lado para jugar con la mano izquierda.', 'settings');
+H('Supervivencia', 'Tienes salud, stamina y saciedad. La saciedad baja un punto cada 7 segundos; a cero pierdes vida. Con menos de 18 de saciedad la stamina no regenera y te mueves más despacio. Con más de 55 regeneras vida poco a poco. Caer no mata: despiertas con penalización de oro o materiales.', 'heart');
+H('Comer bien', 'Cada alimento aporta saciedad, salud y energía según su tamaño, su preparación y su rareza. Las bayas apenas sacian; un guiso del cazador cura 34; el banquete de Vhalor cura 70 y da un beneficio de 7 minutos. La carne cruda resta vida: cocínala en la fogata.', 'food');
+H('Combate cuerpo a cuerpo', 'El ataque tiene tres fases: preparación, golpe y recuperación. Puedes encadenar cuatro golpes con multiplicadores crecientes si atacas dentro de la ventana. Desde la ventana de cancelación puedes bloquear o esquivar sin esperar a terminar. Mantener el ataque con Fuerza 2 carga un golpe pesado. Las mazas y martillos rompen guardias.', 'sword');
+H('Escudo, bloqueo y parry', 'Equipar un escudo añade el botón de bloqueo. Mantenerlo reduce el daño según el escudo: broquel 48 %, redondo 62 %, cometa 72 %, pavés 86 %. Los primeros instantes son parry: solo recibes el 10 % del daño, recuperas stamina y el atacante queda aturdido. Con Guardia 5 el embate de escudo aturde; con Guardia 8 devuelves proyectiles.', 'shield');
+H('Arcos y flechas', 'Mantén el ataque para tensar: un tiro flojo hace 45 % de daño y uno pleno 135 %. Arrastra el dedo sobre el botón para apuntar con precisión: la línea del mundo muestra la trayectoria. Hay nueve municiones: básica, pesada, ígnea, gélida, veneno, dentada, somnífera, virote y mithril. X cicla la munición disponible.', 'bow');
+H('Esquiva', 'Q rueda con invulnerabilidad durante casi todo el giro. Cuesta stamina y tiene enfriamiento. Con Agilidad 3 giras en el sitio sin perder impulso y con Agilidad 6 la esquiva habilita un contraataque.', 'roll');
+H('Combustible', 'Cocinar, fundir, forjar y destilar consumen combustible de tu mochila: la madera rinde 1, el carbón 4 y el carbón vegetal 6. Oficio reduce el gasto. En los talleres públicos se suma una unidad extra. Sin combustible la receta aparece bloqueada aunque tengas los materiales.', 'fire');
+H('Granja', 'Compra una parcela al Mercader Supremo, ara con azada, siembra, riega y fertiliza. Hay 24 cultivos con ciclos de 2 a 4 días. Regar multiplica el crecimiento; el fertilizante dorado produce cosechas de tres estrellas que se venden hasta el triple. La hoz cosecha en área.', 'role_farm');
+H('Ayudar en granjas vecinas', 'Ocho granjeros tienen parcela propia: Marta, Odo, Helga, Tomás, Mira, Gunnar, Yara y Bram. Pide trabajo y te asignarán una tarea concreta (regar, cosechar, sembrar o alimentar) con dos días de plazo. Al completarla vuelves y cobras oro, confianza y experiencia. Cada granjero da una tarea al día.', 'quest');
+H('Ganado', 'Compra animales en la Intendencia y colócalos desde la mochila: gallinero para gallinas, patos y conejos; corral y granero para ovejas, cabras, cerdos, vacas y alpacas; establo para monturas. Aliméntalos con pienso para que produzcan huevo, leche, lana, trufa y estiércol.', 'role_tend');
+H('Tameo y monturas', 'Tres métodos: por comida (crías y animales dóciles), por sedación (debilita, dardo narcótico, alimenta mientras duerme) y por vínculo (unicornio, kirin y pegaso exigen acercarte despacio). Una montura necesita ser adulta, tameada y llevar su silla. Afinidad 3 abre las terrestres, 5 las grandes, 7 las voladoras y 9 las míticas.', 'tame');
+H('Santuarios y jefes', 'Diez zonas únicas reparten la fauna mítica. Cada criatura nace solo en su santuario y no lo abandona. Los seis jefes cambian de patrón por fases según su vida: el Rey Troll invoca trolls, la Hidra se regenera, el Fénix renace una vez, Fenrir llama sabuesos, el Jotun congela el suelo y el Dragón abre cuatro fases con meteoros. Sus botines únicos alimentan las recetas de Tier 3.', 'boss');
+H('Dormir y camas', 'Tres opciones. El petate enrollado se hace A MANO con paja, fibra y cuerda: duerme donde estés, pero hay riesgo de emboscada y recuperas menos. La posada de Gunda cuesta 18 oro, es segura y te deja algo mermado. En tu propia casa, una cama colocada restaura todo sin riesgo; las de plumas y el lecho noble despiertan con vigor extra.', 'bed');
+H('Curas y estados', 'El sangrado se corta con cualquier venda. El veneno se limpia con antídoto, agua bendita o infusión. El fuego se apaga con ungüento para quemaduras. La ralentización se quita con férula o bálsamo de escarcha. Aplicar una venda lleva entre 0,9 y 1,6 segundos: no lo hagas delante de un jefe.', 'potion');
+H('Tierras y títulos', 'El mundo tiene 44 parcelas de seis tamaños. Las vende el Mercader Supremo: necesitas una escritura (120 oro, o fabricada con lino y oro) y el precio de la parcela, que sube un 7 % por cada una que ya posees. Los títulos llegan con la cantidad: Colono, Terrateniente, Señor de Tierras, Noble Menor, Noble Mayor y Gran Señor de Vhalor.', 'parcel');
+H('Economía y banco', 'Cada comerciante compra mejor lo suyo: Finn paga el pescado un 25 % más, los granjeros la cosecha un 15 %, Rurik las pieles un 30 %. El banco de Silas da un 0,5 % diario y el oro depositado nunca se pierde al caer. La confianza alta da descuentos; el odio congela cuentas y cierra puertas.', 'bank');
+H('Familia', 'Sube la confianza de un NPC del género opuesto a 80, coquetea, ten citas y propón matrimonio con dos anillos de oro. Necesitas una casa con al menos dos camas. Maera celebra la boda por 50 oro. Los hijos nacen a los cinco días, crecen en tres etapas y de adolescentes pueden trabajar.', 'family');
+H('Robo y consecuencias', 'Cosechar en parcela ajena es robar. Si un NPC o guardia te ve a menos de 9 tiles y con línea de visión, pierdes 30 de confianza y sube tu busca. Sin testigos, solo 8. Con 40 de busca la guardia te persigue.', 'warning');
+H('Rendimiento', 'El mundo es de 512×512 tiles y se dibuja por chunks con caché y precarga, así que explorar no da tirones. La calidad de partículas y la resolución interna se ajustan solas según los FPS. F3 muestra el panel de rendimiento. Todo el arte es procedural: no se descarga ninguna imagen.', 'settings');
 
 /* ==========================================================
 9 · TABLAS AUXILIARES PARA world.js / systems.js
@@ -729,22 +755,28 @@ D.PARCEL_CLASSES = [
 ];
 D.BED_TIERS = { roll: 0, straw: 1, wood: 2, feather: 3, noble: 4 };
 D.SERVICE_ACTS = Object.keys(SVC);
+/* Clave de grupo válida en MERCHANT_STATIONS aunque no sea un NPC concreto */
+const MERCHANT_GROUPS = { hunter: 1 };
 
 /* ==========================================================
 10 · VALIDACIÓN FORENSE Y SELLADO
 ========================================================== */
-/* Comprobaciones adicionales propias de esta parte */
+const FUNC_OK = ['sleep', 'chest', 'livestock', 'mounts', 'gate', 'guard_post', 'guardian', 'water_source', 'light', 'scare'];
 Object.keys(D.CITY_STRUCTS).forEach(function (k) {
   const c = D.CITY_STRUCTS[k];
   if (!c.name || !c.kind) D.errors.push('Estructura de ciudad incompleta: ' + k);
+});
+Object.keys(D.PUBLIC_STATIONS).forEach(function (k) {
+  const p = D.PUBLIC_STATIONS[k];
+  if (!D.CITY_STRUCTS[k]) D.errors.push('Taller público sin estructura: ' + k);
+  if (D.STATIONS.indexOf(p.station) < 0) D.errors.push('Taller público con estación inválida: ' + k);
 });
 Object.keys(D.BUILDINGS).forEach(function (k) {
   const b = D.BUILDINGS[k];
   if (!b.size || b.size.length !== 2) D.errors.push('Edificio sin tamaño: ' + k);
   (b.functions || []).forEach(function (f) {
     if (D.STATIONS.indexOf(f) >= 0) return;
-    if (['sleep', 'chest', 'livestock', 'mounts', 'gate', 'guard_post', 'guardian', 'water_source', 'light', 'scare'].indexOf(f) < 0)
-      D.errors.push('Función desconocida en ' + k + ': ' + f);
+    if (FUNC_OK.indexOf(f) < 0) D.errors.push('Función desconocida en ' + k + ': ' + f);
   });
   if (b.upgradeFrom && !D.BUILDINGS[b.upgradeFrom]) D.errors.push('Mejora sin origen: ' + k);
   if (b.guardian && !D.SPECIES[b.guardian]) D.errors.push('Guardián inexistente en ' + k);
@@ -752,11 +784,12 @@ Object.keys(D.BUILDINGS).forEach(function (k) {
 });
 Object.keys(D.STATION_INFO).forEach(function (s) {
   const info = D.STATION_INFO[s];
-  if (info.building && !D.BUILDINGS[info.building]) D.errors.push('Estación sin edificio: ' + s);
-  if (info.building && D.BUILDINGS[info.building].functions.indexOf(s) < 0) D.errors.push('Edificio no ofrece su estación: ' + s);
+  if (!info.building) return;
+  if (!D.BUILDINGS[info.building]) { D.errors.push('Estación sin edificio: ' + s); return; }
+  if ((D.BUILDINGS[info.building].functions || []).indexOf(s) < 0) D.errors.push('Edificio no ofrece su estación: ' + s);
 });
 Object.keys(D.MERCHANT_STATIONS).forEach(function (n) {
-  if (!D.NPCS[n] && D.HUNTERS.indexOf(n) < 0) D.errors.push('Mercader con taller inexistente: ' + n);
+  if (!D.NPCS[n] && !MERCHANT_GROUPS[n]) D.errors.push('Mercader con taller inexistente: ' + n);
   D.MERCHANT_STATIONS[n].stations.forEach(function (s) {
     if (D.STATIONS.indexOf(s) < 0) D.errors.push('Taller inválido en ' + n + ': ' + s);
   });
@@ -765,7 +798,6 @@ Object.keys(D.NPCS).forEach(function (k) {
   const n = D.NPCS[k];
   if (!n.dlg || !n.dlg.nodes.root) D.errors.push('NPC sin diálogo raíz: ' + k);
   (n.services || []).forEach(function (s) { if (!SVC[s]) D.errors.push('Servicio desconocido en ' + k + ': ' + s); });
-  /* Todo destino de diálogo debe existir */
   Object.keys(n.dlg.nodes).forEach(function (nk) {
     (n.dlg.nodes[nk].choices || []).forEach(function (c) {
       if (c.go && !n.dlg.nodes[c.go]) D.errors.push('Destino de diálogo roto: ' + k + '.' + nk + ' → ' + c.go);
@@ -773,9 +805,6 @@ Object.keys(D.NPCS).forEach(function (k) {
         D.errors.push('Acción de diálogo desconocida: ' + k + ' → ' + c.act);
     });
   });
-});
-D.QUESTS.forEach(function (q) {
-  if (q.kind === 'gather' && !D.ITEMS[q.item]) D.errors.push('Contrato de recolección sin objeto: ' + q.id);
 });
 D.STALL.sells.forEach(function (i) { if (!D.ITEMS[i]) D.errors.push('Bandeja vende objeto inexistente: ' + i); });
 D.STALL.buys.forEach(function (i) { if (!D.ITEMS[i]) D.errors.push('Bandeja compra objeto inexistente: ' + i); });
@@ -787,14 +816,14 @@ if (!ok) {
 } else {
   DEF.seal();
 }
-
-console.info('[CR] data-world.js listo · ' +
-  Object.keys(D.BUILDINGS).length + ' edificios (' + HOUSES.length + ' casas) · ' +
+console.info('[CR] data-world.js v4 listo · ' +
+  Object.keys(D.BUILDINGS).length + ' edificios (' + HOUSES.length + ' casas, ' + STATION_BLD.length + ' estaciones) · ' +
   Object.keys(D.CITY_STRUCTS).length + ' estructuras de ciudad · ' +
+  Object.keys(D.PUBLIC_STATIONS).length + ' talleres públicos · ' +
   Object.keys(D.NPCS).length + ' NPC · ' + D.QUESTS.length + ' contratos · ' +
   D.HELP.length + ' secciones de ayuda · ' + D.TIPS.length + ' consejos · validación: ' + (ok ? 'OK' : 'FALLO'));
 console.info('[CR] CONTENIDO TOTAL · ' + Object.keys(D.ITEMS).length + ' objetos · ' +
   D.RECIPES.length + ' recetas · ' + Object.keys(D.SPECIES).length + ' especies · ' +
   D.BIOMES.length + ' biomas · ' + D.ZONES.length + ' santuarios · ' + D.STATIONS.length + ' estaciones · ' +
-  D.SKILLS.length + ' habilidades');
+  D.SABERS.length + ' saberes · ' + D.SKILLS.length + ' habilidades');
 })();

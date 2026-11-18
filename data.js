@@ -1,12 +1,12 @@
 /* ============================================================
-KANATO DE JOTUN · data.js — Núcleo de contenido v3 (parte 1 de 4)
-Define: balance, curva de nivel, árbol de habilidades, estaciones
-de crafteo con combustible, biomas, santuarios con territorio,
-nodos de recurso, cultivos, nutrición, municiones y escudos.
-Expone CR.DEF para que data-items / data-species / data-world
-registren el resto y validen las referencias al final.
-CORREGIDO: la clave PARRY_ST_REFUND ya no contiene un espacio
-(errores de sintaxis aquí tumban en cascada a todos los módulos).
+KANATO DE JOTUN · data.js — Núcleo de contenido v4 (parte 1 de 4)
+CAMBIOS v4:
+· Estaciones reducidas a 6 (menos mesas): fundición/herrería/yunque
+  se hacen en la FORJA; telar/potro/fletching en el BANCO; molino
+  en la COCINA.
+· Saberes (recetas aprendibles) + Tiers por nivel (1-10 / 11-30 / 31-40).
+· Estaciones PÚBLICAS del mercado (horno y mesa) con penalización.
+· Herramientas rotas reparables + estadísticas que crecen con el nivel.
 ============================================================ */
 (function () {
 'use strict';
@@ -38,7 +38,7 @@ const BAL = CR.BAL = {
   ATTACK_CD: 0.34, REACH: 1.45, SPEAR_REACH: 2.05,
   COMBO_MULT: [1, 1.14, 1.34, 1.62], COMBO_WINDOW: 0.85,
   ATK_WINDUP: 0.07, ATK_ACTIVE: 0.10, ATK_RECOVER: 0.17,
-  CANCEL_WINDOW: 0.13,          /* desde aquí se puede bloquear/esquivar */
+  CANCEL_WINDOW: 0.13,
   HEAVY_CHARGE: 0.42, HEAVY_MULT: 2.1,
   CRIT: 0.10, CRIT_MULT: 1.75, DEF_K: 46,
   KNOCKBACK: 2.4, HITSTOP: 0.045,
@@ -63,32 +63,35 @@ const BAL = CR.BAL = {
   BLEED_DPS: 2.4, BLEED_TIME: 7, POISON_TIME: 7, BURN_TIME: 4.5,
   STAGGER_TIME: 0.55, SLOW_TIME: 2.2,
 
-  /* --- IA: cadencia de ataque (nunca infinito) --- */
+  /* --- IA --- */
   AI_THINK: 0.12, AI_REST_MIN: 1.1, AI_REST_MAX: 2.6,
   AI_BURST_MIN: 1, AI_BURST_MAX: 3, AI_TELEGRAPH: 0.42,
   AI_LEASH: 15, AI_LEASH_MYTH: 24, AI_CHASE_GIVEUP: 2.4,
   AI_HUNT_RADIUS: 13, AI_FLEE_RADIUS: 9,
 
-  /* --- Spawn separado y territorial --- */
+  /* --- Spawn --- */
   SPAWN_TICK: 4, SPAWN_TRIES: 10,
   SPAWN_RING: [20, 44], SPAWN_DESPAWN: 78, SPAWN_ACTIVE: 56,
-  SPAWN_MIN_DIST: 18,           /* entre grupos distintos */
-  SPAWN_PRED_PREY: 18,          /* carnívoros lejos de herbívoros */
+  SPAWN_MIN_DIST: 18, SPAWN_PRED_PREY: 18,
   SPAWN_PACK_HERB: [1, 3], SPAWN_PACK_PRED: [1, 2], SPAWN_PACK_MYTH: [1, 1],
   SPAWN_CITY_BUFFER: 52,
   CAP: 230, WILD_CAP: 42, HERB_CAP: 16, SPECIES_CAP: 5,
 
-  /* --- Progresión --- */
+  /* --- Progresión por nivel (mejora 4: estadísticas base) --- */
   LEVEL_XP: [0, 90, 210, 370, 570, 820, 1120, 1480, 1900, 2400,
              2980, 3650, 4420, 5300, 6300, 7420, 8680, 10080, 11640, 13360,
              15250, 17320, 19580, 22040, 24700, 27580, 30680, 34000, 37560, 41360,
              45400, 49700, 54260, 59080, 64180, 69560, 75220, 81180, 87440, 94000],
   POINTS_PER_LEVEL: 1, POINTS_MILESTONE: 5, POINTS_MILESTONE_BONUS: 1,
+  LEVEL_HP: 3, LEVEL_ST: 1, LEVEL_DEF_EVERY: 5,
+  /* Tiers de recetas por nivel: T1 1-10 · T2 11-30 · T3 31-40 */
+  TIER_BOUNDS: [10, 30, 40],
+  SABER_POINTS_PER_LEVEL: 1,
   XP_CHOP: 9, XP_MINE: 11, XP_FISH: 14, XP_HARVEST: 9, XP_TILL: 4,
   XP_COOK: 10, XP_CRAFT: 12, XP_SMELT: 14, XP_TAME: 40, XP_HELP: 18,
   XP_LEVEL_BONUS: 0.035,
 
-  /* --- Oficios (XP de profesión, separado del nivel global) --- */
+  /* --- Oficios --- */
   TRADE_TABLE: [0, 100, 250, 450, 700, 1000, 1400, 1900, 2500, 3200, 4100],
   TRADE_BONUS: 0.05,
 
@@ -114,11 +117,18 @@ const BAL = CR.BAL = {
   SHOP_MARKUP: 2.4, TRUST_DISCOUNT: 0.16, TRUST_SELL_BONUS: 0.16,
   DEBT_ITEM_RATE: 0.8, QUALITY_MULT: [1, 1.5, 2.2, 3.0],
   REPAIR_COST_PER_DUR: 0.4, UPGRADE_FACTOR: 0.7,
+  /* Reparación de herramienta ROTA: fracción de los materiales de su receta */
+  BROKEN_REPAIR_FACTOR: 0.5,
   GIFT_DIV: 10, GIFT_MAX: 15, SMALLTALK_DAILY: 3,
   WITNESS_RADIUS: 9, THEFT_FINE: 50, HEAT_DECAY: 2,
   BLESS_COST: 25, BLESS_XP: 0.12, CHARITY_COST: 10,
 
-  /* --- Ayuda en granjas vecinas (tareas reales) --- */
+  /* --- Estaciones PÚBLICAS del mercado (mejora 2) --- */
+  PUBLIC_CRAFT_CD: 6,        /* segundos entre usos del horno/mesa pública */
+  PUBLIC_FUEL_PLUS: 1,       /* combustible extra por usar lo público */
+  PUBLIC_SLOW_MULT: 1.0,     /* (reservado) */
+
+  /* --- Ayuda en granjas --- */
   HELP_TASKS: {
     water:   { n: [6, 10], pay: 7,  trust: 5, xp: 14, label: 'Regar' },
     harvest: { n: [4, 7],  pay: 15, trust: 7, xp: 20, label: 'Cosechar' },
@@ -156,7 +166,7 @@ const BAL = CR.BAL = {
 };
 
 /* ==========================================================
-2 · ÁRBOL DE HABILIDADES (puntos por nivel)
+2 · ÁRBOL DE HABILIDADES (sin cambios de contenido)
 ========================================================== */
 const SKILLS = [
   { id: 'might', name: 'Fuerza', glyph: 'sword', max: 10,
@@ -190,24 +200,21 @@ const SKILLS = [
   { id: 'artisan', name: 'Oficio', glyph: 'craft', max: 10,
     per: { craftQ: 0.055, fuel: -0.045, yield: 0.045 }, unit: '% calidad, ahorro de combustible y rendimiento',
     desc: 'Cada punto mejora la calidad fabricada, gasta menos leña y rinde más material.',
-    unlocks: { 1: 'Banco de trabajo', 2: 'Horno de fundición', 3: 'Telar y potro', 4: 'Yunque', 5: 'Mesa de flechas', 6: 'Alambique', 8: 'Forja maestra', 10: 'Recetas legendarias' } }
+    unlocks: { 1: 'Banco de trabajo', 2: 'Forja propia', 3: 'Cocina avanzada', 4: 'Yunque de villa', 5: 'Alambique', 6: 'Recetas de maestro', 8: 'Forja maestra', 10: 'Recetas legendarias' } }
 ];
 const SKILL_BY_ID = {};
 SKILLS.forEach(function (s) { SKILL_BY_ID[s.id] = s; });
 
-/** Nivel global a partir de XP total. */
 function levelFromXP(xp) {
   let lv = 1;
   for (let i = 1; i < BAL.LEVEL_XP.length; i++) if (xp >= BAL.LEVEL_XP[i]) lv = i + 1;
   return Math.min(BAL.LEVEL_XP.length, lv);
 }
-/** Puntos totales que corresponden a un nivel (incluye hitos). */
 function pointsForLevel(lv) {
   let p = (lv - 1) * BAL.POINTS_PER_LEVEL;
   p += Math.floor((lv - 1) / BAL.POINTS_MILESTONE) * BAL.POINTS_MILESTONE_BONUS;
   return p;
 }
-/** ¿Cumple los requisitos de una receta / edificio / montura? */
 function meetsReq(req, level, alloc) {
   if (!req) return true;
   if (req.lv && level < req.lv) return false;
@@ -221,50 +228,70 @@ function reqText(req) {
   if (req.skill) for (const k in req.skill) parts.push((SKILL_BY_ID[k] ? SKILL_BY_ID[k].name : k) + ' ' + req.skill[k]);
   return parts.join(' · ');
 }
+/* --- Tiers (mejora 4) --- */
+function tierOfLevel(lv) {
+  const b = BAL.TIER_BOUNDS;
+  if (lv <= b[0]) return 1;
+  if (lv <= b[1]) return 2;
+  return 3;
+}
+function tierRange(t) {
+  const b = BAL.TIER_BOUNDS;
+  if (t === 1) return '1–' + b[0];
+  if (t === 2) return (b[0] + 1) + '–' + b[1];
+  return (b[1] + 1) + '–' + b[2];
+}
 
 /* ==========================================================
-3 · ESTACIONES DE CRAFTEO Y COMBUSTIBLE
+3 · ESTACIONES v4 · SOLO 6 (mejora 3)
 ========================================================== */
-const STATIONS = ['hand', 'campfire', 'kitchen', 'mill', 'smelter', 'forge',
-                  'anvil', 'workbench', 'fletching', 'tannery', 'loom', 'alchemy'];
+const STATIONS = ['hand', 'campfire', 'workbench', 'kitchen', 'forge', 'alchemy'];
 const STATION_INFO = {
-  hand:      { name: 'A mano',            glyph: 'interact', fuel: 0, building: null,        req: null,
+  hand:      { name: 'A mano',       glyph: 'interact', fuel: 0, building: null,       req: null,
                desc: 'Sin mesa ni nivel: pico, hacha y azada de piedra, caña y arco de madera, flechas caseras, cuerda, antorchas y vendas simples.' },
-  campfire:  { name: 'Fogata',            glyph: 'fire',     fuel: 1, building: 'campfire',  req: null,
-               desc: 'Asa carne y pescado, hierve agua. Consume leña.' },
-  kitchen:   { name: 'Cocina',            glyph: 'food',     fuel: 1, building: 'kitchen',   req: { lv: 3, skill: { artisan: 1 } },
-               desc: 'Guisos, panes, tartas y platos que curan y dan vigor. Consume leña.' },
-  mill:      { name: 'Molino de mano',    glyph: 'grid',     fuel: 0, building: 'mill',      req: { lv: 4, skill: { artisan: 2 } },
-               desc: 'Muele grano en harina y prensa semillas en aceite.' },
-  smelter:   { name: 'Horno de fundición',glyph: 'fire',     fuel: 3, building: 'smelter',   req: { lv: 5, skill: { artisan: 2 } },
-               desc: 'Convierte mineral en lingotes. Necesita mucho combustible.' },
-  forge:     { name: 'Forja',             glyph: 'craft',    fuel: 2, building: 'forge',     req: { lv: 7, skill: { artisan: 3 } },
-               desc: 'Espadas, lanzas, mazas y herramientas de metal.' },
-  anvil:     { name: 'Yunque',            glyph: 'armor',    fuel: 1, building: 'anvil',     req: { lv: 9, skill: { artisan: 4 } },
-               desc: 'Armaduras completas, escudos y bardas.' },
-  workbench: { name: 'Banco de trabajo',  glyph: 'build',    fuel: 0, building: 'workbench', req: { lv: 2, skill: { artisan: 1 } },
-               desc: 'Herramientas de madera y piedra, mochilas, muebles y camas.' },
-  fletching: { name: 'Mesa de flechas',   glyph: 'bow',      fuel: 0, building: 'fletching', req: { lv: 8, skill: { marks: 2, artisan: 3 } },
-               desc: 'Arcos, ballestas y todo tipo de flechas.' },
-  tannery:   { name: 'Potro de curtir',   glyph: 'material', fuel: 0, building: 'tannery',   req: { lv: 4, skill: { artisan: 2 } },
-               desc: 'Curtido de pieles en cuero y correas.' },
-  loom:      { name: 'Telar',             glyph: 'grid',     fuel: 0, building: 'loom',      req: { lv: 4, skill: { artisan: 2 } },
-               desc: 'Teje fibra y lana en tela, cuerda y vendajes.' },
-  alchemy:   { name: 'Alambique',         glyph: 'potion',   fuel: 1, building: 'alchemy',   req: { lv: 10, skill: { artisan: 5 } },
+  campfire:  { name: 'Fogata',       glyph: 'fire',     fuel: 1, building: 'campfire',  req: null,
+               desc: 'Asa carne y pescado, hierve agua, hace carbón vegetal. Consume leña.' },
+  workbench: { name: 'Banco de trabajo', glyph: 'build', fuel: 0, building: 'workbench', req: { lv: 2, skill: { artisan: 1 } },
+               desc: 'Herramientas, mochilas, camas, arcos y flechas, cuero, tela y muebles. Antes eran cuatro mesas: ahora una.' },
+  kitchen:   { name: 'Cocina',       glyph: 'food',     fuel: 1, building: 'kitchen',   req: { lv: 3, skill: { artisan: 1 } },
+               desc: 'Guisos, panes, tartas, harina y aceite. Consume leña.' },
+  forge:     { name: 'Forja',        glyph: 'craft',    fuel: 2, building: 'forge',     req: { lv: 5, skill: { artisan: 2 } },
+               desc: 'Funde mineral y forja armas, armaduras y escudos. Antes eran horno, forja y yunque: ahora uno solo.' },
+  alchemy:   { name: 'Alambique',    glyph: 'potion',   fuel: 1, building: 'alchemy',   req: { lv: 10, skill: { artisan: 5 } },
                desc: 'Pociones, elixires, antídotos, dardos y ungüentos.' }
 };
-/** Servicio de mercader: permite usar una estación ajena pagando. */
+/* Mercaderes que prestan estación (con recargo). Lo PÚBLICO está en la plaza. */
 const MERCHANT_STATIONS = {
-  dorn:    { stations: ['forge', 'anvil', 'smelter'], fee: 0.35 },
-  voss:    { stations: ['workbench', 'loom', 'tannery'], fee: 0.25 },
+  dorn:    { stations: ['forge'], fee: 0.35 },
+  voss:    { stations: ['workbench'], fee: 0.25 },
   maera:   { stations: ['alchemy'], fee: 0.30 },
   finn:    { stations: ['campfire', 'kitchen'], fee: 0.20 },
-  supremo: { stations: ['mill'], fee: 0.20 },
-  hunter:  { stations: ['fletching', 'tannery'], fee: 0.28 }
+  supremo: { stations: ['workbench'], fee: 0.20 },
+  hunter:  { stations: ['workbench'], fee: 0.28 }
 };
 
 /* ==========================================================
-4 · BIOMAS (12)
+3b · SABERES · recetas aprendibles (mejora 4)
+========================================================== */
+const SABERS = [
+  { id: 'smith',  name: 'Fundición y forja', glyph: 'fire',   tier: 1,
+    desc: 'Lingotes, armas, herramientas y armaduras de metal.' },
+  { id: 'craft',  name: 'Oficio de banco',   glyph: 'build',  tier: 1,
+    desc: 'Mochilas, camas, cuero, tela, arcos, flechas y muebles.' },
+  { id: 'cook',   name: 'Cocina de campaña', glyph: 'food',   tier: 1,
+    desc: 'Platos que curan y dan vigor; harina, aceite y conservas.' },
+  { id: 'field',  name: 'Campo y granja',    glyph: 'role_farm', tier: 1,
+    desc: 'Azadas y regaderas mejores, fertilizantes y piensos.' },
+  { id: 'alchemy',name: 'Alquimia',          glyph: 'potion', tier: 2,
+    desc: 'Pociones, vendas avanzadas, dardos y elixires.' },
+  { id: 'master', name: 'Maestría mayor',    glyph: 'crown',  tier: 3,
+    desc: 'Mithril, adamantita, legendarios y platos de maestro.' }
+];
+const SABER_BY_ID = {};
+SABERS.forEach(function (s) { SABER_BY_ID[s.id] = s; });
+
+/* ==========================================================
+4 · BIOMAS (12) — sin cambios
 ========================================================== */
 function biome(id, key, name, base, alt, decor, water, nodes, spawns, fish, density) {
   return { id: id, key: key, name: name, base: base, alt: alt, decor: decor, water: water,
@@ -322,11 +349,7 @@ const BIOMES = [
 ];
 
 /* ==========================================================
-5 · SANTUARIOS: zonas únicas con territorio propio
-   · species: fauna permitida (solo aquí nace)
-   · guard: guardianes que protegen la zona
-   · boss: jefe único de la zona
-   · leash: las criaturas no abandonan su santuario
+5 · SANTUARIOS (10) — sin cambios
 ========================================================== */
 const ZONES = [
   { id: 'aerie', name: 'Nido del Grifo', biome: 5, r: 22, unique: true,
@@ -374,8 +397,7 @@ const ZONE_BY_ID = {};
 ZONES.forEach(function (z) { ZONE_BY_ID[z.id] = z; });
 
 /* ==========================================================
-6 · NODOS DE RECURSO
-   drops: [itemId, min, max, probabilidad]
+6 · NODOS DE RECURSO (21) — sin cambios
 ========================================================== */
 const NODES = {
   tree:        { name: 'Árbol', tool: 'axe', pow: 1, hits: 3, stam: BAL.ST_CHOP, respawn: 3, xp: BAL.XP_CHOP, tint: '#3e6b2f',
@@ -404,7 +426,7 @@ const NODES = {
                  drops: [['sulfur', 1, 2, 1]] },
   obsidian_node: { name: 'Obsidiana', tool: 'pick', pow: 4, hits: 6, stam: BAL.ST_MINE, respawn: 7, xp: BAL.XP_MINE, tint: '#2a2030',
                  drops: [['obsidian', 1, 1, 1], ['stone', 1, 2, 0.6]] },
-  flint_node:  { name: 'Sílex', tool: 'pick', pow: 1, hits: 2, stam: BAL.ST_MINE, respawn: 4, xp: BAL.XP_MINE, tint: '#6a6a62',
+  flint_node:  { name: 'Sílex', tool: 'pick', pow: 1, hits: 2, stam: BAL.XP_MINE ? BAL.ST_MINE : 5, respawn: 4, xp: BAL.XP_MINE, tint: '#6a6a62',
                  drops: [['flint', 1, 2, 1]] },
   ice_node:    { name: 'Hielo puro', tool: 'pick', pow: 2, hits: 3, stam: BAL.ST_MINE, respawn: 4, xp: BAL.XP_MINE, tint: '#bfe4f5',
                  drops: [['ice_shard', 1, 2, 1]] },
@@ -423,7 +445,7 @@ const NODES = {
 };
 
 /* ==========================================================
-7 · CULTIVOS
+7 · CULTIVOS (24) — sin cambios
 ========================================================== */
 const CROPS = {};
 const CROP_ROWS = [
@@ -441,21 +463,16 @@ const CROP_ROWS = [
   ['bean', 'Judía', 9, 2, 'vine'], ['beet', 'Remolacha', 11, 3, 'root']
 ];
 CROP_ROWS.forEach(function (c) {
-  CROPS[c[0]] = {
-    id: c[0], name: c[1], seed: 'seed_' + c[0], product: 'crop_' + c[0],
-    days: c[3], value: c[2], form: c[4]
-  };
+  CROPS[c[0]] = { id: c[0], name: c[1], seed: 'seed_' + c[0], product: 'crop_' + c[0],
+                  days: c[3], value: c[2], form: c[4] };
 });
 
 /* ==========================================================
-8 · NUTRICIÓN · matriz de comida
-   La energía/saciedad/salud se derivan de tamaño, preparación
-   y dificultad de obtención, más el bono propio del plato.
+8 · NUTRICIÓN
 ========================================================== */
 const FOOD_SIZE = { tiny: 4, small: 9, medium: 16, large: 26, feast: 38 };
 const FOOD_PREP = { raw: 0.62, simple: 1.0, cooked: 1.22, refined: 1.45, master: 1.7 };
 const FOOD_RARITY = { common: 1.0, uncommon: 1.15, rare: 1.35, exotic: 1.6 };
-/** Calcula los valores de un alimento a partir de sus rasgos. */
 function nutrition(size, prep, rarity, extra) {
   const base = (FOOD_SIZE[size] || 9) * (FOOD_PREP[prep] || 1) * (FOOD_RARITY[rarity] || 1);
   const e = extra || {};
@@ -469,30 +486,30 @@ function nutrition(size, prep, rarity, extra) {
 }
 
 /* ==========================================================
-9 · MUNICIONES Y ESCUDOS (metadatos de balance)
+9 · MUNICIONES Y ESCUDOS
 ========================================================== */
 const AMMO_KINDS = {
-  basic:   { name: 'Básica',   glyph: 'arrow', dmg: 1.00, effect: null,        desc: 'Flecha corriente de sílex y pluma.' },
-  iron:    { name: 'Pesada',   glyph: 'arrow', dmg: 1.25, effect: null,        desc: 'Punta de hierro: más daño y perforación.' },
-  fire:    { name: 'Ígnea',    glyph: 'fire',  dmg: 1.05, effect: 'burn',      desc: 'Arde al impactar y prende al objetivo.' },
-  ice:     { name: 'Gélida',   glyph: 'snow',  dmg: 1.00, effect: 'slow',      desc: 'Ralentiza y apaga fuegos.' },
-  poison:  { name: 'Veneno',   glyph: 'poison',dmg: 0.90, effect: 'poison',    desc: 'Deja un veneno persistente.' },
-  barbed:  { name: 'Dentada',  glyph: 'cross', dmg: 1.10, effect: 'bleed',     desc: 'Provoca sangrado prolongado.' },
-  tame:    { name: 'Somnífera',glyph: 'tame',  dmg: 0.25, effect: 'sedate',    desc: 'No mata: adormece para poder tamear.' },
-  bolt:    { name: 'Virote',   glyph: 'arrow', dmg: 1.45, effect: null,        desc: 'Para ballesta. Lento de recargar, brutal.' },
-  mythril: { name: 'Mithril',  glyph: 'star',  dmg: 1.70, effect: 'pierce',    desc: 'Atraviesa dos enemigos y no se desvía.' }
+  basic:   { name: 'Básica',   glyph: 'arrow', dmg: 1.00, effect: null,     desc: 'Flecha corriente de sílex y pluma.' },
+  iron:    { name: 'Pesada',   glyph: 'arrow', dmg: 1.25, effect: null,     desc: 'Punta de hierro: más daño y perforación.' },
+  fire:    { name: 'Ígnea',    glyph: 'fire',  dmg: 1.05, effect: 'burn',   desc: 'Arde al impactar y prende al objetivo.' },
+  ice:     { name: 'Gélida',   glyph: 'snow',  dmg: 1.00, effect: 'slow',   desc: 'Ralentiza y apaga fuegos.' },
+  poison:  { name: 'Veneno',   glyph: 'poison',dmg: 0.90, effect: 'poison', desc: 'Deja un veneno persistente.' },
+  barbed:  { name: 'Dentada',  glyph: 'cross', dmg: 1.10, effect: 'bleed',  desc: 'Provoca sangrado prolongado.' },
+  tame:    { name: 'Somnífera',glyph: 'tame',  dmg: 0.25, effect: 'sedate', desc: 'No mata: adormece para poder tamear.' },
+  bolt:    { name: 'Virote',   glyph: 'arrow', dmg: 1.45, effect: null,     desc: 'Para ballesta. Lento de recargar, brutal.' },
+  mythril: { name: 'Mithril',  glyph: 'star',  dmg: 1.70, effect: 'pierce', desc: 'Atraviesa dos enemigos y no se desvía.' }
 };
 const SHIELD_KINDS = {
-  buckler:  { name: 'Broquel',      reduce: 0.48, parry: 0.30, arc: 1.5, weight: 0.6, bash: 0.6, desc: 'Ligero: parry generoso, bloqueo modesto.' },
-  round:    { name: 'Escudo redondo',reduce: 0.62, parry: 0.22, arc: 1.8, weight: 1.0, bash: 1.0, desc: 'Equilibrio entre bloqueo y movilidad.' },
+  buckler:  { name: 'Broquel',       reduce: 0.48, parry: 0.30, arc: 1.5, weight: 0.6,  bash: 0.6, desc: 'Ligero: parry generoso, bloqueo modesto.' },
+  round:    { name: 'Escudo redondo',reduce: 0.62, parry: 0.22, arc: 1.8, weight: 1.0,  bash: 1.0, desc: 'Equilibrio entre bloqueo y movilidad.' },
   kite:     { name: 'Escudo cometa', reduce: 0.72, parry: 0.18, arc: 2.1, weight: 1.35, bash: 1.2, desc: 'Cubre el flanco y las piernas.' },
-  tower:    { name: 'Pavés',        reduce: 0.86, parry: 0.12, arc: 2.5, weight: 1.9, bash: 1.5, desc: 'Muro portátil: lento pero casi impenetrable.' },
+  tower:    { name: 'Pavés',         reduce: 0.86, parry: 0.12, arc: 2.5, weight: 1.9,  bash: 1.5, desc: 'Muro portátil: lento pero casi impenetrable.' },
   spiked:   { name: 'Escudo de púas',reduce: 0.66, parry: 0.16, arc: 1.8, weight: 1.25, bash: 1.9, desc: 'El embate hiere y hace sangrar.' },
-  warding:  { name: 'Égida rúnica', reduce: 0.78, parry: 0.26, arc: 2.2, weight: 1.1, bash: 1.1, desc: 'Absorbe fuego, veneno y corrupción.' }
+  warding:  { name: 'Égida rúnica',  reduce: 0.78, parry: 0.26, arc: 2.2, weight: 1.1,  bash: 1.1, desc: 'Absorbe fuego, veneno y corrupción.' }
 };
 
 /* ==========================================================
-10 · ROLES DE TRABAJADORES
+10 · ROLES
 ========================================================== */
 const ROLES = [
   { id: 'farm', name: 'Sembrar y cosechar', glyph: 'role_farm' },
@@ -505,14 +522,13 @@ const ROLES = [
 ];
 
 /* ==========================================================
-11 · REGISTRO ABIERTO (lo completan las partes 2-4 de los datos)
+11 · REGISTRO ABIERTO + RECETAS CON TIER Y SABER
 ========================================================== */
 const ITEMS = {}, SPECIES = {}, BUILDINGS = {}, NPCS = {}, RECIPES = [], QUESTS = [];
 const HELP = [], TIPS = [], NAMES = { male: [], female: [] };
 const errors = [];
 
 const DEF = CR.DEF = {
-  /** Registra un ítem. Rellena valores por defecto. */
   item: function (id, d) {
     d.id = id;
     if (d.stack === undefined) d.stack = 99;
@@ -522,20 +538,22 @@ const DEF = CR.DEF = {
     ITEMS[id] = d;
     return d;
   },
-  /** Registra una receta.
-      out: {id,n} · ing: [{id|tag,n}] · station · opts:{fuel,req,skill,xp,hand} */
+  /** Registra una receta. opts: {fuel, req, skill, xp, hand, saber, id} */
   recipe: function (outId, n, ing, station, opts) {
     const o = opts || {};
+    const req = o.req || (STATION_INFO[station] ? STATION_INFO[station].req : null) || null;
     const r = {
       id: o.id || ('r_' + outId + (n > 1 ? '_x' + n : '')),
       out: { id: outId, n: n || 1 },
       in: ing || [],
       station: station || 'hand',
       fuel: o.fuel === undefined ? (STATION_INFO[station] ? STATION_INFO[station].fuel : 0) : o.fuel,
-      req: o.req || (STATION_INFO[station] ? STATION_INFO[station].req : null) || null,
+      req: req,
       skill: o.skill || null,
       xp: o.xp === undefined ? BAL.XP_CRAFT : o.xp,
-      hand: !!o.hand
+      hand: !!o.hand,
+      saber: o.saber || null,
+      tier: tierOfLevel(req && req.lv ? req.lv : 1)
     };
     RECIPES.push(r);
     return r;
@@ -549,20 +567,22 @@ const DEF = CR.DEF = {
   nutrition: nutrition,
   meetsReq: meetsReq,
   reqText: reqText,
+  tierOfLevel: tierOfLevel,
+  tierRange: tierRange,
   errors: errors,
 
-  /** Validación forense de todas las referencias cruzadas. La llama data-world.js. */
   validate: function () {
     function has(id, where) { if (!ITEMS[id]) errors.push('Ítem inexistente: ' + id + (where ? ' (en ' + where + ')' : '')); }
     RECIPES.forEach(function (r) {
       has(r.out.id, r.id);
-      if (STATIONS.indexOf(r.station) < 0) errors.push('Estación inválida: ' + r.station + ' en ' + r.id);
+      if (STATIONS.indexOf(r.station) < 0) errors.push('Estación inválida (v4 usa 6): ' + r.station + ' en ' + r.id);
       r.in.forEach(function (i) {
         if (i.id) has(i.id, r.id);
         else if (['fish', 'meat', 'grain', 'vegetable', 'fruit', 'fuel', 'herbany'].indexOf(i.tag) < 0)
           errors.push('Tag inválido: ' + i.tag + ' en ' + r.id);
       });
       if (r.req && r.req.skill) for (const k in r.req.skill) if (!SKILL_BY_ID[k]) errors.push('Skill inválida en ' + r.id);
+      if (r.saber && !SABER_BY_ID[r.saber]) errors.push('Saber inexistente en ' + r.id + ': ' + r.saber);
     });
     Object.keys(NODES).forEach(function (k) { NODES[k].drops.forEach(function (d) { has(d[0], 'nodo ' + k); }); });
     Object.keys(CROPS).forEach(function (k) { has(CROPS[k].seed, 'cultivo ' + k); has(CROPS[k].product, 'cultivo ' + k); });
@@ -576,13 +596,33 @@ const DEF = CR.DEF = {
       if (!s.diet) errors.push('Especie sin dieta: ' + k);
       if (!s.faction) errors.push('Especie sin facción: ' + k);
     });
-    Object.keys(BUILDINGS).forEach(function (k) { Object.keys(BUILDINGS[k].cost || {}).forEach(function (i) { has(i, 'edificio ' + k); }); });
+    Object.keys(BUILDINGS).forEach(function (k) {
+      Object.keys(BUILDINGS[k].cost || {}).forEach(function (i) { has(i, 'edificio ' + k); });
+      (BUILDINGS[k].functions || []).forEach(function (f) {
+        if (STATIONS.indexOf(f) >= 0) return;
+        if (['sleep', 'chest', 'livestock', 'mounts', 'gate', 'guard_post', 'guardian', 'water_source', 'light', 'scare'].indexOf(f) < 0)
+          errors.push('Función desconocida en ' + k + ': ' + f);
+      });
+    });
+    Object.keys(STATION_INFO).forEach(function (s) {
+      const info = STATION_INFO[s];
+      if (info.building && !BUILDINGS[info.building]) errors.push('Estación sin edificio: ' + s);
+    });
+    Object.keys(MERCHANT_STATIONS).forEach(function (n) {
+      MERCHANT_STATIONS[n].stations.forEach(function (s) {
+        if (STATIONS.indexOf(s) < 0) errors.push('Taller inválido en ' + n + ': ' + s);
+      });
+    });
     Object.keys(NPCS).forEach(function (k) {
       const n = NPCS[k];
+      if (!n.dlg || !n.dlg.nodes.root) errors.push('NPC sin diálogo raíz: ' + k);
       if (n.shop) (n.shop.sells || []).forEach(function (i) { has(i, 'tienda ' + k); });
       (n.loves || []).forEach(function (i) { has(i, 'gustos ' + k); });
     });
-    QUESTS.forEach(function (q) { if (q.target && !SPECIES[q.target]) errors.push('Contrato sin especie: ' + q.id); });
+    QUESTS.forEach(function (q) {
+      if (q.kind === 'gather' && !ITEMS[q.item]) errors.push('Contrato sin objeto: ' + q.id);
+      if (q.kind === 'hunt' && q.target && !SPECIES[q.target]) errors.push('Contrato sin especie: ' + q.id);
+    });
     BIOMES.forEach(function (b) {
       b.nodes.forEach(function (n) { if (!NODES[n[0]]) errors.push('Nodo inválido en ' + b.key + ': ' + n[0]); });
       b.spawns.forEach(function (s) { if (!SPECIES[s[0]]) errors.push('Spawn inválido en ' + b.key + ': ' + s[0]); });
@@ -595,14 +635,13 @@ const DEF = CR.DEF = {
     });
     return errors.length === 0;
   },
-  /** Congela el contenido ya validado. */
   seal: function () {
     Object.keys(ITEMS).forEach(function (k) { Object.freeze(ITEMS[k]); });
     Object.keys(SPECIES).forEach(function (k) { Object.freeze(SPECIES[k]); });
     Object.freeze(ITEMS); Object.freeze(SPECIES); Object.freeze(BUILDINGS);
     Object.freeze(NPCS); Object.freeze(RECIPES); Object.freeze(CROPS);
     Object.freeze(NODES); Object.freeze(QUESTS); Object.freeze(BIOMES);
-    Object.freeze(ZONES); Object.freeze(SKILLS);
+    Object.freeze(ZONES); Object.freeze(SKILLS); Object.freeze(SABERS);
   }
 };
 
@@ -614,6 +653,8 @@ CR.DATA = {
   SKILLS: SKILLS, SKILL_BY_ID: SKILL_BY_ID,
   levelFromXP: levelFromXP, pointsForLevel: pointsForLevel,
   meetsReq: meetsReq, reqText: reqText,
+  tierOfLevel: tierOfLevel, tierRange: tierRange,
+  SABERS: SABERS, SABER_BY_ID: SABER_BY_ID,
   STATIONS: STATIONS, STATION_INFO: STATION_INFO, MERCHANT_STATIONS: MERCHANT_STATIONS,
   BIOMES: BIOMES, ZONES: ZONES, ZONE_BY_ID: ZONE_BY_ID,
   NODES: NODES, CROPS: CROPS,
@@ -625,5 +666,7 @@ CR.DATA = {
   errors: errors
 };
 
-console.info('[CR] data.js núcleo v3 · ' + BIOMES.length + ' biomas · ' + ZONES.length + ' santuarios · ' + STATIONS.length + ' estaciones · ' + SKILLS.length + ' habilidades · ' + Object.keys(NODES).length + ' nodos · ' + Object.keys(CROPS).length + ' cultivos');
+console.info('[CR] data.js núcleo v4 · ' + BIOMES.length + ' biomas · ' + ZONES.length + ' santuarios · ' +
+  STATIONS.length + ' estaciones (antes 12) · ' + SABERS.length + ' saberes · 3 tiers · ' +
+  SKILLS.length + ' habilidades · ' + Object.keys(NODES).length + ' nodos · ' + Object.keys(CROPS).length + ' cultivos');
 })();

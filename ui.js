@@ -1,16 +1,20 @@
 /* ============================================================
-KANATO DE JOTUN · ui.js — Capa DOM v3 (horizontal, sin emojis)
-ARCHIVO EN 4 PARTES CONCATENABLES: 10A · 10B · 10C · 10D
-10A abre el IIFE; 10D lo cierra. No insertes nada entre ellas.
+KANATO DE JOTUN · ui.js — Capa DOM v4 (horizontal, sin emojis)
+ARCHIVO EN 2 PARTES CONCATENABLES: 7A · 7B
+7A abre el IIFE; 7B lo cierra. No insertes nada entre ellas.
 
-· HUD apaisado con grupos recolocables y editor en vivo.
-· Canales de combate visibles: ataque, bloqueo, esquiva, montar,
-  munición y ciclo de objetivo.
-· 24 paneles: tienda, deuda, banco, regalo, contratos, parcelas,
-  trabajadores, familia, granja, casa, cofre, animales, crafteo,
-  construcción, talleres, tareas de ayuda, dormir, inventario,
-  mapa, relaciones, ajustes, ayuda y habilidades.
-· Bloqueo de orientación en táctil: el juego es horizontal.
+CAMBIOS v4:
+· Panel RECETARIO (tecla J / botón del menú): los 6 saberes con
+  su tier, estado y coste en puntos de receta (S.learnSaber).
+· Crafteo: badges de TIER (1/2/3), SABER requerido, taller
+  PÚBLICO con enfriamiento visible y recargo de mercader.
+· Inventario y equipo: los objetos ROTOS se marcan en rojo y
+  ofrecen REPARAR con el coste exacto en materiales (S.repairInv
+  / S.repairEquip). Nada se destruye al romperse.
+· Habilidades: muestra puntos de receta (rp) y tier actual.
+· screen-intro registrada para la historia inicial (main.js v4).
+Mantiene todo lo v3: HUD recolocable, editor de controles,
+24 paneles, diálogo con retratos, orientación horizontal.
 ============================================================ */
 (function () {
 'use strict';
@@ -83,9 +87,12 @@ function stars(q) {
   return h + '</span>';
 }
 function price(n) { return '<span class="price">' + uiimg('coin', 12) + U.fmt(n) + '</span>'; }
+/* --- Badges v4 --- */
+function tbadge(t, ok) { return '<span class="tbadge t' + t + (ok ? '' : ' off') + '">T' + t + '</span>'; }
+function btag(txt) { return '<span class="btag">' + esc(txt) + '</span>'; }
 
 /* ==========================================================
-1 · GLIFOS DE INTERFAZ PROPIOS DE ui.js
+1 · GLIFOS DE INTERFAZ (propios de ui.js)
 ========================================================== */
 function registerGlyphs() {
   const H = Art.util;
@@ -174,10 +181,41 @@ function registerGlyphs() {
     stroke(g, [[0, -5], [0, 5]], '#8fe08f', 2.4);
     stroke(g, [[-5, 0], [5, 0]], '#8fe08f', 2.4);
   });
+  /* --- NUEVOS v4 --- */
+  if (!Art.glyphs.repair) G('repair', function (g) {
+    g.save(); g.rotate(-0.5);
+    stroke(g, [[0, 10], [0, -2]], '#8a6a44', 2.4);
+    path(g, [[-4, -2], [4, -2], [3, -7], [-3, -7]], '#a8b0b8', '#6a727a', 0.8);
+    g.restore();
+    g.save(); g.rotate(0.6);
+    stroke(g, [[0, 10], [0, 0]], '#6a6a72', 2.2);
+    path(g, [[-3, 0], [3, 0], [2, -5], [0, -3], [-2, -5]], '#6a6a72', '#4a4a52', 0.7);
+    g.restore();
+    path(g, [[6, -8], [7.4, -5], [10, -4], [7.4, -3], [6, 0], [4.6, -3], [2, -4], [4.6, -5]], '#f3cf7a');
+  });
+  if (!Art.glyphs.public) G('public', function (g) {
+    path(g, [[-11, -4], [0, -11], [11, -4]], '#d8cfae', '#8a8468', 1);
+    for (let i = -1; i <= 1; i++) rr2(g, i * 6 - 1.6, -4, 3.2, 11, 0.7, '#e8e0c8', '#8a8468', 0.6);
+    rr2(g, -11, 7, 22, 3, 0.8, '#c8c0a0', '#8a8468', 0.7);
+    ell(g, 0, -7, 1.6, 1.6, '#e8c040');
+  });
+  if (!Art.glyphs.saber) G('saber', function (g) {
+    path(g, [[-11, -8], [-1, -6], [-1, 9], [-11, 7]], '#e8dcc0', '#a89870', 1);
+    path(g, [[11, -8], [1, -6], [1, 9], [11, 7]], '#f4ecd8', '#a89870', 1);
+    stroke(g, [[0, -6], [0, 9]], '#8a6a44', 1.6);
+    path(g, [[4, -10], [6, -6], [4, -4], [2, -6]], '#f3cf7a', '#a07820', 0.6);
+    for (let i = 0; i < 3; i++) stroke(g, [[-8, -3 + i * 3], [-3, -2.4 + i * 3]], '#c8b898', 0.7);
+  });
+  if (!Art.glyphs.tier) G('tier', function (g) {
+    path(g, [[-8, 8], [8, 8], [5, 3], [-5, 3]], '#8a6d3b');
+    path(g, [[-6, 1], [6, 1], [4, -4], [-4, -4]], '#b08a4a');
+    path(g, [[-4, -6], [4, -6], [2, -11], [-2, -11]], '#d9a441');
+  });
+  function rr2(g, x, y, w, h, r, f, s, lw) { H.rr(g, x, y, w, h, r, f, s, lw); }
 }
 
 /* ==========================================================
-2 · CSS DE COMPONENTES Y EDITOR
+2 · CSS DE COMPONENTES, BADGES v4 Y EDITOR
 ========================================================== */
 function injectCSS() {
   const old = document.getElementById('cr-ui-css');
@@ -210,6 +248,29 @@ function injectCSS() {
 '.chip.on{background:#3fbf6f22;border-color:#3fbf6f;color:#bfe9cd}',
 '.chip.off{opacity:.5}',
 '.chip.warn{background:#c0392b22;border-color:#a3542e;color:#f2c1ba}',
+/* --- v4: badges de tier --- */
+'.tbadge{display:inline-flex;align-items:center;justify-content:center;padding:1px 7px;border-radius:9px;border:1px solid;font:800 10px/1.5 system-ui,sans-serif;letter-spacing:.04em;margin-right:4px}',
+'.tbadge.t1{background:#3fbf6f22;border-color:#3fbf6f;color:#bfe9cd}',
+'.tbadge.t2{background:#5aa7e022;border-color:#5aa7e0;color:#bfe4f5}',
+'.tbadge.t3{background:#9a5ae022;border-color:#9a5ae0;color:#d8c8f8}',
+'.tbadge.off{opacity:.45;filter:grayscale(.7)}',
+/* --- v4: objeto roto --- */
+'.btag{display:inline-flex;align-items:center;padding:1px 7px;border-radius:9px;border:1px solid #a3542e;background:#c0392b33;color:#f2c1ba;font:800 9.5px/1.5 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;margin-left:4px}',
+'.islot.broken{border-color:#a3542e;background:#c0392b26}',
+'.islot.broken::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(45deg,transparent 44%,rgba(224,75,58,.85) 47%,rgba(224,75,58,.85) 53%,transparent 56%)}',
+'.eq.broken{border-color:#a3542e;background:#c0392b26}',
+'.eq.broken .en{color:#f2c1ba}',
+/* --- v4: taller público --- */
+'.pubchip{animation:pubPulse 1.8s ease-in-out infinite}',
+'@keyframes pubPulse{0%,100%{box-shadow:0 0 0 0 rgba(217,164,65,0)}50%{box-shadow:0 0 0 4px rgba(217,164,65,.18)}}',
+/* --- v4: tarjetas de saber --- */
+'.sabers{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:9px}',
+'.saber{background:linear-gradient(180deg,#1a140966,#0d0a0688);border:1px solid #8a6d3b55;border-radius:11px;padding:10px 11px}',
+'.saber.learned{border-color:#3fbf6f88;box-shadow:0 0 0 1px #3fbf6f22 inset}',
+'.saber.locked{opacity:.66}',
+'.sbhead{display:flex;align-items:center;gap:7px;margin-bottom:5px}',
+'.sbname{flex:1;font-family:Georgia,serif;color:#f3cf7a;font-size:14px}',
+'.sbsamples{font-size:10.5px;color:#8a7a5a;margin-top:4px;line-height:1.5}',
 '.tabs{display:flex;gap:4px;flex-wrap:wrap;margin:7px 0 9px}',
 '.tab{padding:5px 11px;border-radius:8px;border:1px solid #8a6d3b66;background:#00000040;color:#b3a482;font-size:11.5px;cursor:pointer}',
 '.tab.on{background:linear-gradient(180deg,#8a6d3b,#5a4520);color:#f3cf7a;border-color:#d9a441}',
@@ -237,6 +298,7 @@ function injectCSS() {
 '.islot .n{position:absolute;right:2px;bottom:1px;font-size:9px;font-weight:700;color:#f3cf7a;text-shadow:0 1px 2px #000}',
 '.islot .dur{position:absolute;left:3px;right:3px;bottom:2px;height:3px;background:#000a;border-radius:2px;overflow:hidden}',
 '.islot .dur i{display:block;height:100%;background:linear-gradient(90deg,#8a6420,#3fbf6f)}',
+'.islot .dur i.low{background:linear-gradient(90deg,#8a2418,#e04b3a)}',
 '.tw{min-height:42px}',
 '.warn,.ok{display:flex;align-items:flex-start;gap:7px;padding:7px 10px;border-radius:8px;font-size:12px;margin-bottom:9px;line-height:1.45}',
 '.warn{border:1px solid #a3542e;background:#c0392b22;color:#f2c1ba}',
@@ -295,8 +357,8 @@ function injectCSS() {
 '.eqgrid{grid-template-columns:repeat(auto-fill,minmax(62px,1fr));gap:4px}',
 '.eq .ei{height:22px}.eq .en{font-size:8.5px}',
 '.mapwrap canvas{max-width:min(400px,52vh)}',
-'.branches{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px}',
-'.branch{padding:7px 8px}.bname{font-size:13px}',
+'.branches,.sabers{grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px}',
+'.branch,.saber{padding:7px 8px}.bname,.sbname{font-size:13px}',
 '#ctl-editor{padding:6px 10px;gap:8px}#ctl-editor input[type=range]{width:76px}',
 '}',
 '@media (max-height:360px){.kv{grid-template-columns:repeat(auto-fit,minmax(96px,1fr))}.warn,.ok{padding:5px 8px;font-size:11px;margin-bottom:7px}.muted{font-size:11px}}'
@@ -332,9 +394,9 @@ UI.enterFullscreen = function () {
     try {
       if (window.screen && screen.orientation && typeof screen.orientation.lock === 'function') {
         const p = screen.orientation.lock('landscape');
-        if (p && p.catch) p.catch(function () { /* el navegador puede rechazarlo: el aviso sigue visible */ });
+        if (p && p.catch) p.catch(function () {});
       }
-    } catch (e) { /* sin soporte: se resuelve girando el dispositivo */ }
+    } catch (e) {}
     setTimeout(function () { UI.checkOrient(true); R.resize(); }, 280);
   };
   if (rq) { try { const p = rq.call(d); if (p && p.then) p.then(lock).catch(lock); else lock(); } catch (e) { lock(); } }
@@ -352,10 +414,11 @@ function initOrientation() {
   if (window.screen && screen.orientation && screen.orientation.addEventListener) CR.Bindings.add(screen.orientation, 'change', ping, false, 'ui');
   UI.checkOrient(true);
 }
+
 /* ==========================================================
-4 · PANTALLAS, CARGA Y ERROR
+4 · PANTALLAS, CARGA Y ERROR (v4: incluye screen-intro)
 ========================================================== */
-const SCREENS = ['screen-loading', 'screen-title', 'screen-create', 'screen-pause', 'screen-ko', 'screen-error'];
+const SCREENS = ['screen-loading', 'screen-title', 'screen-create', 'screen-intro', 'screen-pause', 'screen-ko', 'screen-error'];
 UI.showScreen = function (id) {
   for (let i = 0; i < SCREENS.length; i++) { const s = el(SCREENS[i]); if (s) s.classList.toggle('active', SCREENS[i] === id); }
 };
@@ -400,7 +463,7 @@ UI.banner = function (title, sub) {
 };
 
 /* ==========================================================
-6 · HUD (solo escribe en el DOM cuando el valor cambia)
+6 · HUD (v4: el nivel muestra también puntos de receta)
 ========================================================== */
 function setText(node, v) { if (node && node._cv !== v) { node._cv = v; node.textContent = v; } }
 function setWidth(node, v) { if (node && node._cw !== v) { node._cw = v; node.style.width = v; } }
@@ -434,12 +497,15 @@ UI.refreshHUD = function () {
   const dw = el('debt-wrap');
   if (dw) dw.hidden = p.free;
   setIconVal('hud-debt', 'ui:debt', 12, U.fmt(p.debt));
-  /* Nivel global y puntos libres (abre habilidades) */
+  /* Nivel + puntos de habilidad + puntos de receta (v4) */
   const lv = el('hud-level');
   if (lv) {
-    const pts = p.lvl.points;
-    setIconVal('hud-level', pts > 0 ? 'ui:points' : 'ui:level', 13, 'Nv ' + p.lvl.level + (pts > 0 ? ' · ' + pts : ''));
-    lv.classList.toggle('haspoints', pts > 0);
+    const pts = p.lvl.points, rp = p.lvl.rp || 0;
+    let txt = 'Nv ' + p.lvl.level;
+    if (pts > 0) txt += ' · ' + pts;
+    if (rp > 0) txt += ' · ' + rp + ' rec';
+    setIconVal('hud-level', (pts > 0 || rp > 0) ? 'ui:points' : 'ui:level', 13, txt);
+    lv.classList.toggle('haspoints', pts > 0 || rp > 0);
   }
   const T = CR.Time;
   setText(el('clock-time'), String(T.hour).padStart(2, '0') + ':' + String(T.minute).padStart(2, '0'));
@@ -448,7 +514,6 @@ UI.refreshHUD = function () {
   setOnlyIcon('clock-weather', T.weather === 'rain' ? 'ui:rain' : T.weather === 'wind' ? 'ui:wind' : null, 13);
   const v = el('fx-vignette');
   if (v) v.classList.toggle('lowhp', p.st.hp / p.st.maxHp < 0.28);
-  /* Montura */
   const mw = el('mount-wrap');
   if (mw) {
     if (p.mount) {
@@ -457,7 +522,6 @@ UI.refreshHUD = function () {
       setWidth(el('bar-mount-fill'), U.clamp(p.mount.st.st / p.mount.st.maxSt, 0, 1) * 100 + '%');
     } else mw.hidden = true;
   }
-  /* Munición activa (solo con arco/ballesta) */
   const ab = el('ammo-badge');
   if (ab) {
     const am = E.ammoInfo(p);
@@ -471,7 +535,6 @@ UI.refreshHUD = function () {
       ab.classList.add('empty');
     } else ab.hidden = true;
   }
-  /* Jefe cercano */
   let boss = null, bd = 26 * 26;
   for (let i = 0; i < E.list.length; i++) {
     const e = E.list[i];
@@ -487,7 +550,6 @@ UI.refreshHUD = function () {
       setWidth(el('boss-fill'), U.clamp(boss.st.hp / boss.st.maxHp, 0, 1) * 100 + '%');
     } else bb.hidden = true;
   }
-  /* Estado de botones */
   const sp = el('btn-sprint');
   if (sp) sp.classList.toggle('on', CR.Input.isHeld('sprint'));
   const bl = el('btn-block');
@@ -545,6 +607,12 @@ const CTL_GROUPS = [
   ['hud-tl', 'plate', 'Estado'], ['hud-tc', 'menu', 'Herramientas'], ['hud-tr', 'map', 'Mapa y reloj'],
   ['hud-bl', 'joy', 'Movimiento'], ['hud-br', 'acts', 'Acciones'], ['hud-bc', 'quick', 'Barra rápida']
 ];
+/* Escala base según la pantalla real: en un celular horizontal (~360 px de alto)
+   los controles se reducen; en tablets/PC crecen un poco. El ajuste del usuario se multiplica encima. */
+function viewScale() {
+  const vw = window.innerWidth || 800, vh = window.innerHeight || 400;
+  return Math.max(0.6, Math.min(1.3, Math.min(vh / 430, vw / 860)));
+}
 function applyCtl() {
   const c = CR.Settings.values.ctl;
   for (let i = 0; i < CTL_GROUPS.length; i++) {
@@ -558,18 +626,17 @@ function applyCtl() {
     n.style.transform = 'translate(-50%,-50%)';
     n.style.opacity = String(c.opacity);
   }
-  document.documentElement.style.setProperty('--ctl-scale', String(c.scale));
+  document.documentElement.style.setProperty('--ctl-scale', (c.scale * viewScale()).toFixed(3));
   document.body.classList.toggle('ctl-nolabels', !c.labels);
   requestAnimationFrame(clampGroups);
 }
 UI.applyCtl = applyCtl;
-/** Ningún grupo puede salirse de la pantalla, sea cual sea su tamaño. */
 function clampGroups() {
   const vw = window.innerWidth, vh = window.innerHeight;
   for (let i = 0; i < CTL_GROUPS.length; i++) {
     const n = el(CTL_GROUPS[i][0]);
     if (!n || n.offsetParent === null) continue;
-    const r = (n.querySelector('.hz') || n).getBoundingClientRect();
+    const r = n.getBoundingClientRect();
     let dx = 0, dy = 0;
     if (r.left < 6) dx = 6 - r.left;
     else if (r.right > vw - 6) dx = (vw - 6) - r.right;
@@ -601,8 +668,7 @@ function buildEditor() {
     '<button class="btn small" id="ce-swap">' + uiimg('swap', 13) + '<span>Mano</span></button>' +
     '<button class="btn small" id="ce-labels">' + uiimg('book', 13) + '<span>Etiquetas</span></button>' +
     '<button class="btn small" id="ce-reset">' + uiimg('reset', 13) + '<span>Restablecer</span></button>' +
-    '<button class="btn small primary" id="ce-done">' + uiimg('check', 13) + '<span>Listo</span></button>' +
-    '<button class="btn small" id="ce-x" aria-label="Cerrar" title="Cerrar">✕</button>';
+    '<button class="btn small primary" id="ce-done">' + uiimg('check', 13) + '<span>Listo</span></button>';
   document.body.appendChild(d);
   UI._editor = d;
   CR.Bindings.add(d.querySelector('#ce-scale'), 'input', function (e) {
@@ -626,7 +692,6 @@ function buildEditor() {
     CR.Settings.resetCtl(); syncEditor(); A.play('close'); UI.toast('Controles restablecidos.', 'good');
   }, false, 'ui');
   CR.Bindings.add(d.querySelector('#ce-done'), 'click', function () { UI.exitCtlEdit(); }, false, 'ui');
-  CR.Bindings.add(d.querySelector('#ce-x'), 'click', function () { UI.exitCtlEdit(); }, false, 'ui');
   return d;
 }
 function syncEditor() {
@@ -678,7 +743,7 @@ function initCtlDrag() {
         if (!UI._edit) return;
         e.preventDefault(); e.stopPropagation();
         pid = e.pointerId;
-        try { n.setPointerCapture(pid); } catch (err) { /* noop */ }
+        try { n.setPointerCapture(pid); } catch (err) {}
         const c = CR.Settings.values.ctl;
         sx = e.clientX; sy = e.clientY;
         ox = c[key].x; oy = c[key].y;
@@ -719,14 +784,13 @@ function initJoystick() {
     const l = U.len(dx, dy) || 1;
     const cl = Math.min(l, rad);
     const nx = dx / l, ny = dy / l;
-    const sc = CR.Settings.values.ctl.scale || 1;
-    knob.style.transform = 'translate(' + (nx * cl / sc) + 'px,' + (ny * cl / sc) + 'px)';
+    knob.style.transform = 'translate(' + (nx * cl) + 'px,' + (ny * cl) + 'px)';
     CR.Input.setJoy(nx * cl / rad, ny * cl / rad);
   }
   CR.Bindings.add(zone, 'pointerdown', function (e) {
     if (UI._edit || jid !== null || !CR.Input.enabled || UI._portrait) return;
     jid = e.pointerId;
-    try { zone.setPointerCapture(e.pointerId); } catch (err) { /* noop */ }
+    try { zone.setPointerCapture(e.pointerId); } catch (err) {}
     const r = base.getBoundingClientRect();
     cx = r.left + r.width / 2; cy = r.top + r.height / 2; rad = Math.max(18, r.width / 2 - 10);
     zone.classList.add('active');
@@ -749,7 +813,7 @@ function initJoystick() {
 }
 
 /* ==========================================================
-9 · BOTONES DE ACCIÓN, MENÚ Y SILENCIO
+9 · BOTONES, MENÚ Y SILENCIO (v4: botón Recetario)
 ========================================================== */
 function bindAction(id, action, hold) {
   const n = el(id);
@@ -760,7 +824,7 @@ function bindAction(id, action, hold) {
     n.classList.add('pressed');
     CR.Input.press(action);
     if (hold) CR.Input.setHeld(action, true);
-    try { n.setPointerCapture(e.pointerId); } catch (err) { /* noop */ }
+    try { n.setPointerCapture(e.pointerId); } catch (err) {}
   }, false, 'ui');
   const up = function () { n.classList.remove('pressed'); if (hold) CR.Input.setHeld(action, false); };
   CR.Bindings.add(n, 'pointerup', up, false, 'ui');
@@ -779,7 +843,7 @@ function hydrateIcons(root) {
 UI.hydrateIcons = hydrateIcons;
 function initButtons() {
   bindAction('btn-attack', 'attack', true);
-  /* Arco: mantén para tensar, ARRASTRA el dedo para apuntar (la línea del mundo lo muestra) y SUELTA para disparar */
+  /* Arco: mantén para tensar, arrastra para apuntar, suelta para disparar */
   (function () {
     const n = el('btn-attack');
     if (!n) return;
@@ -794,10 +858,10 @@ function initButtons() {
       if (e.pointerId !== pid || UI._edit || !E.player || !E.player.isBow) return;
       const dx = e.clientX - cx, dy = e.clientY - cy;
       const l = Math.sqrt(dx * dx + dy * dy);
-      if (l < 12) return;                       /* zona muerta: sin arrastre se conserva la dirección actual */
+      if (l < 12) return;
       const c = R.screenToWorld ? R.screenToWorld : (CR.Camera && CR.Camera.screenToWorld);
       if (!c) return;
-      const w0 = c(0, 0), w1 = c(dx, dy);      /* el mapa es isométrico: se convierte el arrastre a dirección real */
+      const w0 = c(0, 0), w1 = c(dx, dy);
       CR.Input.setBowAim(Math.atan2(w1.y - w0.y, w1.x - w0.x), Math.min(1, l / 90));
       e.preventDefault();
     }, false, 'ui');
@@ -845,7 +909,7 @@ function initButtons() {
   const sk = el('btn-skills');
   if (sk) CR.Bindings.add(sk, 'click', function () { UI.openSkills(); }, false, 'ui');
 
-  /* Silencio global, siempre visible */
+  /* Silencio global */
   const hudMenu = el('hud-menu');
   let mute = null;
   if (hudMenu) {
@@ -880,7 +944,7 @@ function initButtons() {
   Bus.on('settings', function (k) { if (k === 'volume') syncMute(); }, 'ui');
   syncMute();
 
-  /* Construcción y editor de controles en la barra */
+  /* Construcción, Recetario (v4) y editor de controles */
   if (hudMenu) {
     const bb = document.createElement('button');
     bb.className = 'mbtn'; bb.id = 'btn-build';
@@ -888,11 +952,23 @@ function initButtons() {
     bb.innerHTML = Art.html('ui:build', 17);
     hudMenu.insertBefore(bb, el('btn-settings') || null);
     CR.Bindings.add(bb, 'click', function () { UI.openBuild(); }, false, 'ui');
+    const rb = document.createElement('button');
+    rb.className = 'mbtn'; rb.id = 'btn-recipes';
+    rb.title = 'Recetario y saberes (J)'; rb.setAttribute('aria-label', 'Recetario');
+    rb.innerHTML = Art.html('ui:saber', 17);
+    hudMenu.insertBefore(rb, el('btn-settings') || null);
+    CR.Bindings.add(rb, 'click', function () { UI.openRecipes(); }, false, 'ui');
+    const eb = document.createElement('button');
+    eb.className = 'mbtn'; eb.id = 'btn-ctl';
+    eb.title = 'Editar controles (O)'; eb.setAttribute('aria-label', 'Editar controles');
+    eb.innerHTML = Art.html('ui:edit', 17);
+    hudMenu.insertBefore(eb, el('btn-settings') || null);
+    CR.Bindings.add(eb, 'click', function () { UI.enterCtlEdit(); }, false, 'ui');
   }
 }
 
 /* ==========================================================
-10 · TECLADO
+10 · TECLADO (v4: J = Recetario)
 ========================================================== */
 function initKeys() {
   Bus.on('input:key', function (code, down, repeat) {
@@ -908,6 +984,7 @@ function initKeys() {
     if (S.dialog) return;
     if (code === 'KeyI') UI.toggleLocal('inventory');
     else if (code === 'KeyC') UI.toggleLocal('craft');
+    else if (code === 'KeyJ') UI.openRecipes();
     else if (code === 'KeyM') UI.toggleLocal('map');
     else if (code === 'KeyR') UI.toggleLocal('social');
     else if (code === 'KeyH') UI.openSkills();
@@ -915,8 +992,9 @@ function initKeys() {
     else if (code === 'KeyO') UI.enterCtlEdit();
   }, 'ui');
 }
+
 /* ==========================================================
-11 · DIÁLOGO (retratos procedurales, máquina de escribir)
+11 · DIÁLOGO
 ========================================================== */
 UI.renderDialog = function () {
   const v = S.dialogView();
@@ -1029,7 +1107,6 @@ UI.syncInput = function () {
   Bus.emit('ui:gate');
 };
 function refresh() { if (S.panel) UI.renderPanel(); else if (UI.local) UI.renderLocal(); }
-
 const ROLE_IC = { farm: 'role_farm', water: 'role_water', tend: 'role_tend', guard: 'role_guard', follow: 'role_follow', haul: 'role_haul', idle: 'role_idle' };
 function roleSelect(roles, uid, cur, disabled) {
   let s = '<select data-act="role" data-uid="' + uid + '"' + (disabled ? ' disabled' : '') + '>';
@@ -1046,23 +1123,47 @@ function costHTML(cost) {
 }
 function stageName(s) { return { baby: 'bebé', child: 'niño', teen: 'joven', adult: 'adulto' }[s] || s; }
 function relName(r) { return { none: 'sin relación', dating: 'noviazgo', engaged: 'prometidos', married: 'casados' }[r] || r; }
+/* Coste de reparación legible (v4) */
+function repairCostHTML(rep) {
+  if (!rep) return '';
+  const parts = [];
+  for (const k in rep.cost) parts.push(rep.cost[k] + '× ' + esc((itemDef(k) || {}).name || k));
+  return parts.join(' + ');
+}
 
 /* ==========================================================
-13 · CRAFTEO (estación + combustible + nivel + recargo)
+13 · CRAFTEO v4 · estación + combustible + tier + saber + público
 ========================================================== */
 function craftHTML() {
   const v = S.craftView();
   let h = kv([
-    ['Nivel', uiimg('level', 13) + v.level],
+    ['Nivel', uiimg('level', 13) + v.level + ' · Tier ' + v.tier],
     ['Combustible', uiimg('fire', 13) + v.fuel],
-    ['Puntos libres', uiimg('points', 13) + v.points]
+    ['Puntos de receta', uiimg('saber', 13) + v.rp],
+    ['Puntos de rama', uiimg('points', 13) + v.points]
   ]);
+  /* Estaciones disponibles y su origen */
   h += '<div>';
   for (let i = 0; i < D.STATIONS.length; i++) {
     const s = D.STATIONS[i], info = D.STATION_INFO[s];
-    h += chip(uiimg(v.stations[s] ? 'check' : 'cross', 11) + '<span>' + esc(info.name) + '</span>', !!v.stations[s]);
+    const src = v.src ? v.src[s] : null;
+    const lab = src === 'public' ? 'público' : src === 'merchant' ? 'mercader' : src === 'own' ? 'tuya' : '';
+    h += chip(uiimg(v.stations[s] ? (src === 'public' ? 'public' : 'check') : 'cross', 11) +
+      '<span>' + esc(info.name) + (lab ? ' · ' + lab : '') + '</span>', !!v.stations[s]);
   }
-  h += '</div><p class="muted">A mano puedes hacer el equipo básico (pico, hacha, azada, caña, arco y flechas caseras). Cada estación se construye en tu parcela o la presta un mercader con recargo. Combustible: madera 1, carbón 4, carbón vegetal 6.</p>';
+  h += '</div>';
+  /* Talleres públicos con su enfriamiento */
+  if (v.publics && v.publics.length) {
+    h += '<div class="muted" style="margin:2px 0 6px">' + uiimg('public', 12) + ' En la plaza: ';
+    for (let i = 0; i < v.publics.length; i++) {
+      const pb = v.publics[i];
+      const cd = v.cd && v.cd[pb.station] ? Math.ceil(v.cd[pb.station]) : 0;
+      h += '<span class="chip pubchip' + (cd > 0 ? ' warn' : ' on') + '">' + uiimg(pb.glyph || 'public', 11) +
+        '<span>' + esc(pb.name) + (cd > 0 ? ' · ' + cd + ' s' : ' · listo') + '</span></span>';
+    }
+    h += ' Sin calidad y con leña extra.</div>';
+  }
+  h += '<p class="muted">A mano sale el equipo básico de supervivencia. Las recetas se agrupan en <b>saberes</b> que aprendes en el Recetario (J) y se limitan por <b>Tier</b>: T1 nivel 1-10, T2 11-30, T3 31-40.</p>';
   if (!UI._craftTab) UI._craftTab = 'all';
   const cats = [['all', 'Todo'], ['tool', 'Herramientas'], ['weapon', 'Armas'], ['ammo', 'Flechas'], ['shield', 'Escudos'], ['armor', 'Armaduras'], ['food', 'Comida'], ['heal', 'Curas'], ['misc', 'Otros']];
   h += '<div class="tabs">';
@@ -1078,23 +1179,68 @@ function craftHTML() {
           : r.cat === UI._craftTab);
     if (!grp) continue;
     shown++;
+    /* Cabecera de la fila: nombre + tier + saber + roto/no */
+    let name = tbadge(r.tier, r.tierOk) + ictxt(r.name) + (r.n > 1 ? ' ×' + r.n : '');
+    if (r.saber) name += ' <span class="chip' + (r.saberOk ? ' on' : ' off') + '">' + uiimg('saber', 10) + '<span>' + esc(r.saberName || r.saber) + '</span></span>';
     let ing = '';
     for (let k = 0; k < r.ing.length; k++) {
       const x = r.ing[k];
       ing += chip(Art.html(ingKey(x), 12) + '<span>' + x.has + '/' + x.need + '</span>', x.has >= x.need);
     }
     ing += chip(uiimg('craft', 11) + '<span>' + esc(r.stationName) + '</span>', r.stationOk);
+    if (r.public) ing += '<span class="chip pubchip' + (r.cdOk ? ' on' : ' warn') + '">' + uiimg('public', 11) +
+      '<span>' + esc(r.pubName || 'público') + (r.cdOk ? '' : ' · ' + r.cdLeft + ' s') + '</span></span>';
     if (r.fuel > 0) ing += chip(uiimg('fire', 11) + '<span>' + r.fuel + '</span>', r.fuelOk);
     if (r.fee > 0) ing += '<span class="chip warn">' + uiimg('coin', 11) + '<span>taller ' + r.fee + '</span></span>';
     if (!r.reqOk) ing += '<span class="chip warn">' + uiimg('lock', 11) + '<span>' + esc(r.reqText) + '</span></span>';
-    h += row(iimg(r.outId, 24), ictxt(r.name) + (r.n > 1 ? ' ×' + r.n : ''), ing,
+    if (!r.tierOk) ing += '<span class="chip warn">' + uiimg('tier', 11) + '<span>requiere Tier ' + r.tier + '</span></span>';
+    if (!r.saberOk) ing += '<span class="chip warn">' + uiimg('saber', 11) + '<span>aprende ' + esc(r.saberName || r.saber) + ' (J)</span></span>';
+    h += row(iimg(r.outId, 24), name, ing,
       btn('craft', 'Fabricar', 'primary', 'data-id="' + r.id + '"' + (r.can ? '' : ' disabled')),
-      r.reqOk ? '' : 'locked');
+      (r.reqOk && r.tierOk && r.saberOk) ? '' : 'locked');
   }
   if (!shown) h += '<p class="muted">Nada en esta categoría.</p>';
+  h += '<div class="qbar">' + btnI('openrecipes', 'saber', 'Abrir Recetario (J)', '') + '</div>';
   return h;
 }
 
+/* ==========================================================
+13b · RECETARIO v4 · saberes aprendibles con puntos de receta
+========================================================== */
+function recipesHTML() {
+  const v = S.sabersView();
+  let h = kv([
+    ['Nivel', uiimg('level', 13) + v.level + ' · Tier ' + v.tier],
+    ['Puntos de receta', uiimg('saber', 13) + v.points],
+    ['Saberes aprendidos', uiimg('check', 13) + v.learnedCount + '/' + v.list.length]
+  ]);
+  h += '<p class="muted">Cada nivel te da <b>1 punto de receta</b>. Úsalo para aprender un <b>saber</b>: una familia entera de recetas de tu tier. Lo que se hace <b>a mano</b> y la cocina de fogata básica no necesitan saber alguno. Tier 1 = nivel 1-10 · Tier 2 = 11-30 · Tier 3 = 31-40.</p>';
+  if (v.points > 0) h += okbox(uiimg('saber', 13) + ' Tienes <b>' + v.points + '</b> punto(s) de receta sin gastar.');
+  h += '<div class="sabers">';
+  for (let i = 0; i < v.list.length; i++) {
+    const sb = v.list[i];
+    /* Muestras de recetas del saber para que se vea qué desbloquea */
+    const samples = [];
+    for (let k = 0; k < D.RECIPES.length && samples.length < 4; k++) {
+      const r = D.RECIPES[k];
+      if (r.saber === sb.id && D.ITEMS[r.out.id]) samples.push(D.ITEMS[r.out.id].name);
+    }
+    h += '<div class="saber' + (sb.learned ? ' learned' : (sb.tierOk ? '' : ' locked')) + '">';
+    h += '<div class="sbhead">' + uiimg(sb.glyph, 18) + '<span class="sbname">' + esc(sb.name) + '</span>' +
+      tbadge(sb.tier, sb.tierOk) +
+      (sb.learned ? chip('Aprendido', true) : btnI('learn', 'saber', 'Aprender (1 pto)', 'primary', 'data-id="' + sb.id + '"' + (sb.tierOk && v.points > 0 ? '' : ' disabled'))) +
+      '</div>';
+    h += '<p class="muted">' + esc(sb.desc) + '</p>';
+    h += '<div class="muted">' + sb.inTier + ' recetas en tu tier · ' + sb.recipes + ' en total</div>';
+    if (samples.length) h += '<div class="sbsamples">Ej.: ' + samples.map(ictxt).join(' · ') + '</div>';
+    if (!sb.tierOk) h += '<div class="bnext">' + uiimg('lock', 11) + ' Saber de Tier ' + sb.tier + ': se desbloquea al subir de nivel.</div>';
+    h += '</div>';
+  }
+  h += '</div>';
+  h += sec('craft', 'Ir a fabricar');
+  h += '<div class="qbar">' + btnI('opencraft', 'craft', 'Abrir crafteo (C)', 'primary') + '</div>';
+  return h;
+}
 /* ==========================================================
 14 · PANELES DE SISTEMA
 ========================================================== */
@@ -1357,7 +1503,7 @@ UI.renderPanel = function () {
     const v = S.buildView();
     title = 'Construcción'; ic = uiimg('build', 20);
     h += kv([['Parcelas', String(v.parcels)], ['Construcciones', String(v.owned.length)], ['Nivel', uiimg('level', 13) + v.level]]);
-    h += '<p class="muted">Se construye en el primer hueco libre de tus parcelas. Las estaciones desbloquean recetas; los guardianes protegen lo que levantas.</p>';
+    h += '<p class="muted">Se construye en el primer hueco libre de tus parcelas. Solo hay cinco estaciones: fogata, banco, cocina, forja y alambique. Los guardianes protegen lo que levantas.</p>';
     for (let i = 0; i < v.list.length; i++) {
       const b = v.list[i];
       let sub = ictxt(b.desc) + '<br>' + costHTML(b.cost);
@@ -1379,6 +1525,14 @@ UI.renderPanel = function () {
     title = 'Talleres de ' + v.name; ic = uiimg('craft', 20);
     h += kv([['Recargo', Math.round(v.fee * 100) + '%'], ['Tu oro', uiimg('coin', 13) + U.fmt(v.gold)]]);
     h += '<p class="muted">Usa estos talleres sin construirlos: el mercader cobra un recargo sobre el valor de lo fabricado. Acércate a él para que aparezcan disponibles.</p>';
+    if (v.publics && v.publics.length) {
+      h += sec('public', 'Talleres públicos de la plaza (gratis, lentos)');
+      for (let i = 0; i < v.publics.length; i++) {
+        const pb = v.publics[i];
+        h += row(uiimg(pb.glyph || 'public', 24), ictxt(pb.name), ictxt(pb.desc || ''),
+          chip('siempre abierto', true));
+      }
+    }
     if (!v.list.length) h += '<p class="muted">Este mercader no presta talleres.</p>';
     for (let i = 0; i < v.list.length; i++) {
       const s = v.list[i];
@@ -1437,8 +1591,9 @@ UI.renderPanel = function () {
   }
   openModal(title, h, ic);
 };
+
 /* ==========================================================
-15 · PANELES LOCALES
+15 · PANELES LOCALES (v4: roturas + reparación + recetario)
 ========================================================== */
 const EQ_NAMES = {
   weapon: 'Arma', tool: 'Herramienta', shield: 'Escudo', head: 'Cabeza', chest: 'Pecho', legs: 'Piernas',
@@ -1470,48 +1625,71 @@ UI.renderLocal = function () {
       h += okbox(uiimg(itemKey(v.ammo.id), 13) + ' Munición activa: <b>' + ictxt(v.ammo.def.name) + '</b> ×' + v.ammo.n +
         ' · ' + ictxt(v.ammo.def.desc || ''));
     } else if (p.isBow) {
-      h += warn('Sin munición. Fabrica flechas en la mesa de flechas o cambia con X.');
+      h += warn('Sin munición. Fabrica flechas en el banco de trabajo o cambia con X.');
     }
     h += '<div class="invwrap"><div>' + sec('armor', 'Equipado') + '<div class="eqgrid">';
     for (let i = 0; i < E.EQUIP_SLOTS.length; i++) {
       const s = E.EQUIP_SLOTS[i], it = v.equip[s];
-      h += '<button class="eq" data-act="unequip" data-slot="' + s + '" title="' + esc(it ? it.name : EQ_NAMES[s]) + '">' +
+      const brk = it && it.broken ? ' broken' : '';
+      h += '<button class="eq' + brk + '" data-act="unequip" data-slot="' + s + '" title="' + esc(it ? it.name + (it.broken ? ' (ROTA)' : '') : EQ_NAMES[s]) + '">' +
         '<span class="ei">' + (it ? iimg(it.id, 22) : uiimg(EQ_IC[s] || 'material', 18)) + '</span>' +
         '<span class="en">' + esc(it ? clean(it.name) : EQ_NAMES[s]) + '</span></button>';
     }
-    h += '</div>' + sec('bag', 'Mochila') + '<div class="grid-inv">';
+    h += '</div>';
+    /* Equipo roto: reparación directa con coste visible (mejora 6) */
+    let anyBroken = false;
+    for (let i = 0; i < E.EQUIP_SLOTS.length; i++) {
+      const s = E.EQUIP_SLOTS[i], it = v.equip[s];
+      if (it && it.broken) {
+        if (!anyBroken) { h += sec('repair', 'Equipo roto (repáralo barato)'); anyBroken = true; }
+        h += row(iimg(it.id, 24), ictxt(it.name) + btag('Rota'),
+          'Reparar con: ' + repairCostHTML(it.repair),
+          btnI('repaireq', 'repair', 'Reparar', 'primary', 'data-slot="' + s + '"' + (it.repair && it.repair.can ? '' : ' disabled')));
+      }
+    }
+    h += sec('bag', 'Mochila') + '<div class="grid-inv">';
     for (let i = 0; i < v.items.length; i++) {
       const it = v.items[i];
       const sel = UI.invSel === i ? ' sel' : '';
       if (!it) { h += '<button class="islot' + sel + '" data-act="sel" data-slot="' + i + '"></button>'; continue; }
+      const brk = it.broken ? ' broken' : '';
       let dur = '';
-      if (it.maxDur && it.dur !== undefined) dur = '<span class="dur"><i style="width:' + U.clamp(it.dur / it.maxDur, 0, 1) * 100 + '%"></i></span>';
-      h += '<button class="islot' + sel + '" data-act="sel" data-slot="' + i + '" title="' + esc(clean(it.name)) + '">' +
+      if (it.maxDur && it.dur !== undefined) {
+        const low = it.dur / it.maxDur < 0.25 ? ' low' : '';
+        dur = '<span class="dur"><i class="' + low.trim() + '" style="width:' + U.clamp(it.dur / it.maxDur, 0, 1) * 100 + '%"></i></span>';
+      }
+      h += '<button class="islot' + sel + brk + '" data-act="sel" data-slot="' + i + '" title="' + esc(clean(it.name)) + (it.broken ? ' (ROTA)' : '') + '">' +
         iimg(it.id, 22) + '<span class="n">' + (it.n > 1 ? it.n : '') + '</span>' + dur + '</button>';
     }
     h += '</div></div><div class="detail">';
     const sel = UI.invSel >= 0 ? v.items[UI.invSel] : null;
     if (sel) {
       const def = itemDef(sel.id) || { name: sel.id, cat: 'misc', value: 0 };
-      h += '<h4>' + iimg(sel.id, 20) + esc(clean(def.name)) + (sel.q ? stars(sel.q) : '') + '</h4>';
+      h += '<h4>' + iimg(sel.id, 20) + esc(clean(def.name)) + (sel.q ? stars(sel.q) : '') + (sel.broken ? btag('Rota') : '') + '</h4>';
+      if (sel.broken) h += warn('Está rota y no funciona. Repárala con pocos materiales: no hace falta fabricar otra.');
       h += '<p class="muted">' + ictxt(def.desc || 'Sin descripción.') + '</p>';
-      h += '<p class="muted">' + esc(def.cat) + ' · ' + def.value + ' oro' + (sel.dur !== undefined ? ' · durabilidad ' + sel.dur : '') + '</p>';
+      h += '<p class="muted">' + esc(def.cat) + ' · ' + def.value + ' oro' +
+        (sel.dur !== undefined ? ' · durabilidad ' + sel.dur + '/' + sel.maxDur : '') + '</p>';
+      if (sel.repair && sel.repair.cost) {
+        h += '<div>' + chip(uiimg('repair', 11) + '<span>Reparar: ' + repairCostHTML(sel.repair) + '</span>', sel.repair.can) + '</div>';
+      }
       if (def.food) h += '<div>' + chip(uiimg('food', 11) + '<span>' + (def.food.food || 0) + '</span>', true) +
         chip(uiimg('heart', 11) + '<span>' + (def.food.hp || 0) + '</span>', true) +
         chip(uiimg('stamina', 11) + '<span>' + (def.food.st || 0) + '</span>', true) + '</div>';
       if (def.heal) h += '<div>' + chip(uiimg('potion', 11) + '<span>curación</span>', true) +
         (def.heal.stopBleed ? chip(uiimg('check', 11) + '<span>corta sangrado</span>', true) : '') + '</div>';
       h += '<div class="qbar">';
-      if (def.tool || def.weapon || def.shield || def.armor || def.acc || def.bag) h += btnI('equip', 'check', 'Equipar', 'primary', 'data-slot="' + UI.invSel + '"');
-      if (def.food || def.heal || def.saddle || def.pet || def.animal || def.bed || def.cat === 'misc') h += btnI('use', 'play', 'Usar', 'primary', 'data-id="' + sel.id + '"');
+      if (sel.repair) h += btnI('repair', 'repair', 'Reparar', 'primary', 'data-slot="' + UI.invSel + '"' + (sel.repair.can ? '' : ' disabled'));
+      if (!sel.broken && (def.tool || def.weapon || def.shield || def.armor || def.acc || def.bag)) h += btnI('equip', 'check', 'Equipar', sel.repair ? '' : 'primary', 'data-slot="' + UI.invSel + '"');
+      if (def.food || def.heal || def.saddle || def.pet || def.animal || def.bed || def.place || def.cat === 'misc') h += btnI('use', 'play', 'Usar', 'primary', 'data-id="' + sel.id + '"');
       h += btnI('drop', 'arrow_down', 'Tirar 1', '', 'data-slot="' + UI.invSel + '"');
       if (sel.n > 1) h += btn('dropall', 'Tirar todo', 'danger', 'data-slot="' + UI.invSel + '"');
       h += '</div><p class="muted" style="margin-top:7px">Barra rápida:</p><div class="qbar">';
       for (let i = 0; i < 5; i++) h += btn('quick', String(i + 1), '', 'data-slot="' + i + '" data-id="' + sel.id + '"');
       h += '</div>';
     } else {
-      h += '<p class="muted">Selecciona un objeto para equiparlo, usarlo o asignarlo a la barra rápida.</p>';
-      h += '<p class="muted" style="margin-top:6px">Lo que equipes se ve en tu personaje: armas, herramientas, escudo, armaduras y mochilas.</p>';
+      h += '<p class="muted">Selecciona un objeto para equiparlo, usarlo, repararlo o asignarlo a la barra rápida.</p>';
+      h += '<p class="muted" style="margin-top:6px">Lo que equipes se ve en tu personaje: armas, herramientas, escudo, armaduras y mochilas. Una herramienta rota se marca en rojo y se repara desde aquí.</p>';
     }
     h += sec('xp', 'Oficios');
     for (let i = 0; i < v.skills.length; i++) {
@@ -1519,22 +1697,30 @@ UI.renderLocal = function () {
       h += '<div class="skill"><div class="sl"><span>' + esc(sk.name) + '</span><span>Nv ' + sk.level + '</span></div>' +
         '<div class="st"><div class="sf" style="width:' + sk.pct + '%"></div></div></div>';
     }
-    h += '<div class="qbar">' + btnI('openskills', 'level', 'Habilidades (H)', 'primary') + '</div>';
+    h += '<div class="qbar">' + btnI('openskills', 'level', 'Habilidades (H)', 'primary') +
+      btnI('openrecipes', 'saber', 'Recetario (J)', '') + '</div>';
     h += '</div></div>';
 
   } else if (k === 'craft') {
     title = 'Crafteo'; ic = uiimg('craft', 20);
     h += craftHTML();
 
+  } else if (k === 'recipes') {
+    title = 'Recetario y saberes'; ic = uiimg('saber', 20);
+    h += recipesHTML();
+
   } else if (k === 'skills') {
     const v = S.skillsView();
     title = 'Habilidades'; ic = uiimg('level', 20);
     h += kv([['Nivel', uiimg('level', 13) + v.level + '/' + v.maxLevel],
       ['Puntos libres', uiimg('points', 13) + v.points],
+      ['Puntos de receta', uiimg('saber', 13) + v.rp],
+      ['Tier actual', uiimg('tier', 13) + v.tier],
       ['Experiencia', U.fmt(v.xp) + ' / ' + U.fmt(v.nextXp)]]);
     h += '<div class="prog"><i style="width:' + v.pct + '%"></i></div>';
-    h += '<p class="muted" style="margin-top:7px">Todo suma experiencia: talar, picar, pescar, cultivar, cocinar, fabricar, tamear, ayudar y combatir. Cada nivel da un punto; cada cinco, uno extra.</p>';
+    h += '<p class="muted" style="margin-top:7px">Todo suma experiencia: talar, picar, pescar, cultivar, cocinar, fabricar, tamear, ayudar y combatir. Cada nivel mejora tus estadísticas base, da un punto de habilidad (cada cinco, uno extra) y un punto de receta para aprender saberes.</p>';
     if (v.points > 0) h += okbox(uiimg('points', 13) + ' Tienes <b>' + v.points + '</b> punto(s) para repartir.');
+    if (v.rp > 0) h += okbox(uiimg('saber', 13) + ' Tienes <b>' + v.rp + '</b> punto(s) de receta: úsalos en el Recetario (J).');
     h += '<div class="branches">';
     for (let i = 0; i < v.branches.length; i++) {
       const b = v.branches[i];
@@ -1566,7 +1752,8 @@ UI.renderLocal = function () {
       h += '<div class="skill"><div class="sl"><span>' + esc(tr.name) + '</span><span>Nv ' + tr.level + '</span></div>' +
         '<div class="st"><div class="sf" style="width:' + tr.pct + '%"></div></div></div>';
     }
-    h += '<div class="qbar">' + btnI('respec', 'reset', 'Reiniciar reparto (' + v.respecCost + ' oro)', 'danger') + '</div>';
+    h += '<div class="qbar">' + btnI('openrecipes', 'saber', 'Recetario (J)', 'primary') +
+      btnI('respec', 'reset', 'Reiniciar reparto (' + v.respecCost + ' oro)', 'danger') + '</div>';
 
   } else if (k === 'map') {
     title = 'Mapa de Vhalor'; ic = uiimg('map', 20);
@@ -1667,6 +1854,7 @@ UI.renderLocal = function () {
       chip(uiimg('sprint', 12) + '<span>Shift · correr</span>', true) +
       chip(uiimg('bag', 12) + '<span>I</span>', true) +
       chip(uiimg('craft', 12) + '<span>C</span>', true) +
+      chip(uiimg('saber', 12) + '<span>J · recetario</span>', true) +
       chip(uiimg('build', 12) + '<span>B</span>', true) +
       chip(uiimg('level', 12) + '<span>H</span>', true) +
       chip(uiimg('map', 12) + '<span>M</span>', true) +
@@ -1734,7 +1922,7 @@ function drawBigMap() {
 }
 
 /* ==========================================================
-16 · HANDLERS DELEGADOS
+16 · HANDLERS DELEGADOS (v4: learn / repair / repaireq / openrecipes)
 ========================================================== */
 function amt() { const n = el('ui-amt'); return n ? Math.max(0, parseInt(n.value, 10) || 0) : 0; }
 function panelToLocal(kind) {
@@ -1754,7 +1942,8 @@ function initModalHandlers() {
     if (!b || b.disabled) return;
     const act = b.getAttribute('data-act');
     const id = b.getAttribute('data-id');
-    const slot = parseInt(b.getAttribute('data-slot'), 10);
+    const slotStr = b.getAttribute('data-slot');
+    const slot = parseInt(slotStr, 10);
     const uid = parseInt(b.getAttribute('data-uid'), 10);
     const p = E.player;
     if (!p) return;
@@ -1799,8 +1988,16 @@ function initModalHandlers() {
       case 'openbuild': UI.openBuild(); break;
       case 'opencraft': panelToLocal('craft'); break;
       case 'openskills': panelToLocal('skills'); break;
+      case 'openrecipes': panelToLocal('recipes'); break;
+      case 'learn': {
+        const r = S.learnSaber(id);
+        if (!r.ok) A.play('error');
+        refresh(); break;
+      }
       case 'alloc': S.alloc(id); break;
       case 'respec': S.respec(); break;
+      case 'repair': S.repairInv(slot); break;
+      case 'repaireq': S.repairEquip(slotStr); break;
       case 'accepttask': S.acceptHelpTask(S.panel.data.npcId, b.getAttribute('data-kind')); break;
       case 'turnintask': S.turnInHelpTask(); break;
       case 'canceltask': S.cancelHelpTask(); break;
@@ -1818,7 +2015,7 @@ function initModalHandlers() {
         UI.toast(r.msg, r.ok ? 'good' : 'bad');
         UI.invSel = -1; refresh(); break;
       }
-      case 'unequip': E.unequip(p, slot); refresh(); break;
+      case 'unequip': E.unequip(p, slotStr); refresh(); break;
       case 'drop': case 'dropall': {
         const cur = p.inv[slot];
         if (cur) S.dropSlot(slot, act === 'dropall' ? cur.n : 1);
@@ -1865,7 +2062,10 @@ function initModalHandlers() {
   Bus.on('quick:update', function () { UI.refreshQuickbar(); }, 'ui');
   Bus.on('loot', function () { UI.refreshQuickbar(); }, 'ui');
   Bus.on('alloc', function () { if (UI.local === 'skills') UI.renderLocal(); }, 'ui');
-  Bus.on('globallevel', function () { if (UI.local === 'skills') UI.renderLocal(); }, 'ui');
+  Bus.on('globallevel', function () { if (UI.local === 'skills' || UI.local === 'recipes') UI.renderLocal(); }, 'ui');
+  Bus.on('saber', function () { if (UI.local === 'recipes' || UI.local === 'craft') UI.renderLocal(); }, 'ui');
+  Bus.on('repaired', function () { UI.refreshQuickbar(); }, 'ui');
+  Bus.on('broke', function () { UI.refreshQuickbar(); UI.refreshHUD(); }, 'ui');
   Bus.on('help:progress', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
   Bus.on('help:accepted', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
   Bus.on('help:done', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
@@ -1882,6 +2082,10 @@ UI.openBuild = function () {
 UI.openSkills = function () {
   if (!E.player || S.dialog || UI._portrait || UI._edit) return;
   UI.toggleLocal('skills');
+};
+UI.openRecipes = function () {
+  if (!E.player || S.dialog || UI._portrait || UI._edit) return;
+  UI.toggleLocal('recipes');
 };
 
 /* ==========================================================
@@ -1960,8 +2164,8 @@ UI.init = function () {
   const tv = el('title-version');
   if (tv) tv.textContent = 'v' + CR.version + ' · ' + C.WORLD + '×' + C.WORLD + ' · ' + D.BIOMES.length + ' biomas · horizontal';
   UI.ready = true;
-  console.info('[CR] ui.js v3 listo · HUD horizontal · editor de controles · ' +
-    '24 paneles · ' + D.HELP.length + ' secciones de ayuda · sin emojis');
+  console.info('[CR] ui.js v4 listo · HUD horizontal · editor de controles · recetario y saberes · ' +
+    'reparación de roturas · talleres públicos · ' + D.HELP.length + ' secciones de ayuda · sin emojis');
 };
 UI.dispose = function () {
   if (UI._tipTimer) clearInterval(UI._tipTimer);

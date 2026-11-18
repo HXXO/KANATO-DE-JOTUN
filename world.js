@@ -1,13 +1,16 @@
 /* ============================================================
-KANATO DE JOTUN · world.js — Mundo v3 (512×512)
-· Generación determinista en Worker (Blob, compatible file://)
-  con fallback diferido y timeout.
-· 12 biomas garantizados + 10 santuarios con territorio exclusivo.
-· Vhalor: 2 puertas exactas, Lonja, posada, botica, albergue.
-· 44 parcelas en 6 clases, con color de tierra natural.
-· 8 granjas NPC, campamentos de bandidos, rutas de errantes.
-· Hash espacial sin allocations, A* acotado, LOS por Bresenham.
-· Serialización: semilla + solo diferencias.
+KANATO DE JOTUN · world.js — Mundo v4 (512×512)
+CAMBIOS v4:
+· MERCADO PÚBLICO: horno público (funde y forja, lento) y mesa
+  pública (crafteo básico) colocados en la plaza de Vhalor.
+  Disponibles desde el minuto 1, sin parcela ni nivel.
+· stationsNear() ahora incluye los talleres públicos.
+· stationSource() distingue propia / mercader / pública.
+· stationFee() ya no cobra el 100 % cuando la única estación
+  cercana es pública (la contrapartida pública es tiempo+leña).
+· publicInfo() y publicList() para el panel de crafteo.
+Resto intacto: generación en Worker, 12 biomas, 10 santuarios,
+44 parcelas, 8 granjas, campamentos, hash, A*, LOS, serialización.
 ============================================================ */
 (function () {
 'use strict';
@@ -38,14 +41,17 @@ function buildLayout() {
   st('barracks',     x0 + 31, y0 + 3, 11, 9, 'roderic');
   st('hunter_lodge', x0 + 44, y0 + 3,  9, 7);
   st('fountain',     x0 + 20, y0 + 10, 3, 3);
+
   /* Barrio oeste */
   st('smithy',       x0 + 3,  y0 + 15, 8, 8, 'dorn');
   st('alchemy_hut',  x0 + 3,  y0 + 26, 7, 6);
   st('owner_house',  x0 + 3,  y0 + 36, 10, 8, 'bareth');
+
   /* Barrio este */
   st('steward',      x0 + 44, y0 + 14, 9, 7, 'voss');
   st('land_office',  x0 + 44, y0 + 24, 9, 8, 'supremo');
   st('bank',         x0 + 31, y0 + 34, 9, 8, 'silas');
+
   /* Mercado central */
   st('stall',        x0 + 16, y0 + 17, 3, 2, 'lia');
   st('stall',        x0 + 28, y0 + 17, 3, 2, 'finn');
@@ -56,7 +62,13 @@ function buildLayout() {
   st('pen',          x0 + 20, y0 + 20, 4, 3);
   st('caravan_post', x0 + 28, y0 + 29, 4, 3);
   st('inn',          x0 + 15, y0 + 34, 9, 7, 'gunda');
-  st('gargoyle_perch_city', x0 + 13, y0 + 16, 1, 2);
+
+  /* --- NUEVO v4: talleres públicos del concejo, en la plaza --- */
+  st('public_forge', x0 + 13, y0 + 16, 2, 2);
+  st('public_bench', x0 + 13, y0 + 19, 2, 2);
+
+  /* Gárgolas de la muralla interior (reubicadas para no pisar los talleres) */
+  st('gargoyle_perch_city', x0 + 11, y0 + 16, 1, 2);
   st('gargoyle_perch_city', x0 + 41, y0 + 16, 1, 2);
 
   /* Exactamente 2 puertas: SUR (2 de ancho) y ESTE (2 de alto) */
@@ -71,11 +83,11 @@ function buildLayout() {
   rd(x0 + 24, y0 + 10, 2, ch - 10);
   rd(x0 + 11, y0 + 13, cw - 11, 2);
   /* Troncales exteriores */
-  rd(x0 + 24, y0 + ch, 2, 120);            /* sur */
-  rd(x0 + cw, y0 + 13, 120, 2);            /* este */
-  rd(190, 216, 128, 2);                    /* norte exterior */
-  rd(192, 216, 2, 100);                    /* oeste exterior */
-  rd(316, 216, 2, 32);                     /* enlace norte→este */
+  rd(x0 + 24, y0 + ch, 2, 120);
+  rd(x0 + cw, y0 + 13, 120, 2);
+  rd(190, 216, 128, 2);
+  rd(192, 216, 2, 100);
+  rd(316, 216, 2, 32);
 
   /* --- 44 parcelas en 10 filas con camino de acceso propio --- */
   const PC = {};
@@ -117,14 +129,14 @@ function buildLayout() {
     { owner: 'yara',   x: 352, y: 250, w: 12, h: 12 },
     { owner: 'bram',   x: 178, y: 258, w: 12, h: 12 }
   ];
-  rd(246, 208, 2, 8);   /* marta */
-  rd(268, 208, 2, 8);   /* odo */
-  rd(204, 204, 2, 12);  /* helga */
-  rd(190, 238, 4, 2);   /* tomas */
-  rd(306, 212, 2, 4);   /* mira */
-  rd(224, 184, 2, 32);  /* gunnar */
-  rd(358, 247, 2, 3);   /* yara */
-  rd(190, 264, 4, 2);   /* bram */
+  rd(246, 208, 2, 8);
+  rd(268, 208, 2, 8);
+  rd(204, 204, 2, 12);
+  rd(190, 238, 4, 2);
+  rd(306, 212, 2, 4);
+  rd(224, 184, 2, 32);
+  rd(358, 247, 2, 3);
+  rd(190, 264, 4, 2);
   for (let i = 0; i < farms.length; i++) {
     const f = farms[i];
     f.house = { x: f.x + 1, y: f.y + 1 };
@@ -153,7 +165,7 @@ function buildLayout() {
     { x: x0 + 14, y: y0 + 30 }, { x: x0 + 40, y: y0 + 30 }
   ];
 
-  /* --- Rutas de mercaderes errantes (waypoints sobre caminos) --- */
+  /* --- Rutas de mercaderes errantes --- */
   const routes = [
     [{ x: 253, y: 282 }, { x: 253, y: 290 }, { x: 200, y: 290 }, { x: 160, y: 290 },
      { x: 160, y: 306 }, { x: 220, y: 306 }, { x: 253, y: 306 }, { x: 253, y: 324 },
@@ -167,7 +179,6 @@ function buildLayout() {
      { x: 193, y: 217 }]
   ];
 
-  /* --- Puestos de cazador errante --- */
   const hunterPosts = [
     { x: 196, y: 250, r: 22 }, { x: 320, y: 200, r: 22 },
     { x: 240, y: 180, r: 20 }, { x: 360, y: 280, r: 24 }
@@ -211,7 +222,7 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
       var u = fade(xf), v = fade(yf);
       var aa = p[p[X] + Y], ab = p[p[X] + Y + 1], ba = p[p[X + 1] + Y], bb = p[p[X + 1] + Y + 1];
       var x1 = lerp(grad(aa, xf, yf), grad(ba, xf - 1, yf), u);
-      var x2 = lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), u);
+      var x2 = lerp(grad(ab, xf, yf - 1), grad(bb, xf - 1, yf - 1), v);
       return lerp(x1, x2, v);
     };
   }
@@ -220,6 +231,7 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
     for (var o = 0; o < oct; o++) { sum += n(x * f, y * f) * amp; norm += amp; amp *= 0.5; f *= 2; }
     return (sum / norm) * 0.5 + 0.5;
   }
+
   var nE = mkNoise(seed), nM = mkNoise((seed ^ 0x9e3779b9) >>> 0);
   var nT = mkNoise((seed ^ 0x85ebca6b) >>> 0), nV = mkNoise((seed ^ 0xc2b2ae35) >>> 0);
   var rs = seed >>> 0;
@@ -298,7 +310,7 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
     }
   }
 
-  /* --- Máscara de zonas planas (ciudad, parcelas, granjas, caminos) --- */
+  /* --- Máscara de zonas planas --- */
   function markRect(rx, ry, rw, rh, pad) {
     for (var yy = ry - pad; yy < ry + rh + pad; yy++) {
       if (yy < 0 || yy >= S) continue;
@@ -331,7 +343,7 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
     }
   }
 
-  /* --- Parcelas: tierra de color natural, sin teñir --- */
+  /* --- Parcelas: tierra de color natural --- */
   for (i = 0; i < LAYOUT.parcels.length; i++) {
     var pp = LAYOUT.parcels[i];
     for (var py2 = pp.y; py2 < pp.y + pp.h; py2++) for (var px2 = pp.x; px2 < pp.x + pp.w; px2++) {
@@ -340,7 +352,7 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
       flags[pi] = F.PARCEL;
     }
   }
-  /* --- Granjas NPC: sí son tierra de labor --- */
+  /* --- Granjas NPC: tierra de labor --- */
   for (i = 0; i < LAYOUT.farms.length; i++) {
     var ff = LAYOUT.farms[i];
     for (var fy2 = ff.y; fy2 < ff.y + ff.h; fy2++) for (var fx2 = ff.x; fx2 < ff.x + ff.w; fx2++) {
@@ -410,7 +422,6 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
       best = { x: sx, y: sy }; break;
     }
     if (best) return best;
-    /* Segundo intento: cualquier tile del bioma pedido */
     for (var k3 = 0; k3 < N; k3 += 7) {
       if (biome[k3] !== bid || flat[k3] || (flags[k3] & F.WATER)) continue;
       var bx = k3 % S, by = (k3 / S) | 0;
@@ -425,7 +436,6 @@ function WORLD_GEN(seed, CFG, BIOMES, NODE_KEYS, NODE_SOLID, DENSITY, LAYOUT, ZO
     var Z = ZONES[i];
     var pos = findBiomeSpot(Z.biome, 96, 44, zones, 1400);
     var zr = Z.r;
-    /* El santuario impone su bioma en todo su radio */
     for (var zy = pos.y - zr; zy <= pos.y + zr; zy++) {
       if (zy < 2 || zy >= S - 2) continue;
       for (var zx = pos.x - zr; zx <= pos.x + zr; zx++) {
@@ -594,6 +604,7 @@ const GEN_CFG = {
 const ZONE_DEFS = D.ZONES.map(function (z) {
   return { id: z.id, biome: z.biome, r: z.r, boss: z.boss || null, leash: z.leash };
 });
+const PUB = D.PUBLIC_STATIONS || {};
 
 const W = CR.World = {
   F: F, size: C.WORLD, ready: false, seed: 0,
@@ -612,7 +623,10 @@ W.structInfo = function (key) {
   if (cs) return cs;
   const b = D.BUILDINGS[key];
   if (!b) return null;
-  return { name: b.name, wall: b.wall || '#b0a080', roof: b.roof || '#8a7050', kind: b.kind || 'house', solid: b.blocks !== false, enter: !!b.house };
+  return {
+    name: b.name, wall: b.wall || '#b0a080', roof: b.roof || '#8a7050',
+    kind: b.kind || 'house', solid: b.blocks !== false, enter: !!b.house
+  };
 };
 function structSize(key) {
   const bd = D.BUILDINGS[key];
@@ -636,6 +650,7 @@ W.generate = function (seed, onProgress) {
   W.seed = seed >>> 0;
   W.layout = buildLayout();
   prog(0.06, 'Trazando las murallas de Vhalor…');
+
   return new Promise(function (resolve) {
     let settled = false, timer = 0;
     function cleanup() {
@@ -719,11 +734,17 @@ function install(r) {
     if (!def) continue;
     W.nodes.set(idx, { idx: idx, x: idx % C.WORLD, y: (idx / C.WORLD) | 0, key: key, hp: def.hits, dead: false, respawnDay: 0 });
   }
-  /* Estructuras de la ciudad */
+
+  /* Estructuras de la ciudad · los talleres públicos quedan marcados */
   for (let i = 0; i < L.structs.length; i++) {
     const s = L.structs[i];
-    addBuildingRaw(s.key, s.x, s.y, 'city', true, { vendor: s.tag || null });
+    const pub = PUB[s.key];
+    addBuildingRaw(s.key, s.x, s.y, 'city', true, {
+      vendor: s.tag || null,
+      public: pub ? pub.station : null
+    });
   }
+
   /* Granjas NPC + cultivos preplantados */
   const frng = CR.RNG((W.seed ^ 0x51ed2701) >>> 0);
   const cropIds = Object.keys(D.CROPS);
@@ -739,12 +760,14 @@ function install(r) {
       setSoil(idx, { crop: frng.pick(cropIds), growth: Math.min(1, frng.range(0.2, 1.05)), watered: false, fert: null, q: 0, owner: f.owner, day: 0 });
     }
   }
+
   /* Campamentos de bandidos: fogata y empalizada */
   for (let i = 0; i < W.camps.length; i++) {
     const c = W.camps[i];
     addBuildingRaw('campfire', c.x, c.y, 'bandit', false, {});
     if (W.inBounds(c.x - 3, c.y - 2)) addBuildingRaw('pen', c.x - 3, c.y - 2, 'bandit', false, {});
   }
+
   W.dirty.clear();
   W.ready = true;
 }
@@ -990,7 +1013,6 @@ W.bestHouse = function () {
   }
   return best;
 };
-/** Mejor cama disponible: la casa de mayor tier o una cama colocada. */
 W.bestBed = function () {
   let best = null, bestTier = -1;
   const list = W.playerBuildings();
@@ -1002,7 +1024,11 @@ W.bestBed = function () {
   }
   return best;
 };
-/** Estaciones de crafteo cerca de un punto, incluidas las que prestan los mercaderes. */
+
+/* ==========================================================
+8b · ESTACIONES · propia / mercader / PÚBLICA (v4)
+========================================================== */
+/** Estaciones disponibles cerca de un punto, incluidas las públicas. */
 W.stationsNear = function (x, y, r) {
   const set = { hand: true };
   const r2 = r * r;
@@ -1016,29 +1042,100 @@ W.stationsNear = function (x, y, r) {
       for (let k = 0; k < bd.functions.length; k++) {
         if (D.STATIONS.indexOf(bd.functions[k]) >= 0) set[bd.functions[k]] = true;
       }
-    } else if (b.city && b.data && b.data.vendor) {
-      const ms = D.MERCHANT_STATIONS[b.data.vendor];
-      if (ms) for (let k = 0; k < ms.stations.length; k++) set[ms.stations[k]] = true;
+    } else if (b.city && b.data) {
+      if (b.data.public) set[b.data.public] = true;
+      if (b.data.vendor) {
+        const ms = D.MERCHANT_STATIONS[b.data.vendor];
+        if (ms) for (let k = 0; k < ms.stations.length; k++) set[ms.stations[k]] = true;
+      }
     }
   }
   return set;
 };
-/** Recargo del mercader dueño del taller más cercano (0 si es tuyo). */
-W.stationFee = function (station, x, y, r) {
+
+/** Origen de la estación más cercana: 'own' > 'merchant' > 'public' > null. */
+W.stationSource = function (station, x, y, r) {
+  if (station === 'hand') return 'own';
   const r2 = r * r;
-  let own = false, fee = 1;
+  let own = false, merchant = false, pub = false;
   for (let i = 0; i < W.buildings.length; i++) {
     const b = W.buildings[i];
     if (U.dist2(x, y, b.x + b.w / 2, b.y + b.h / 2) > r2) continue;
     if (b.owner === 'player') {
       const bd = D.BUILDINGS[b.key];
       if (bd && bd.functions && bd.functions.indexOf(station) >= 0) own = true;
-    } else if (b.city && b.data && b.data.vendor) {
-      const ms = D.MERCHANT_STATIONS[b.data.vendor];
-      if (ms && ms.stations.indexOf(station) >= 0) fee = Math.min(fee, ms.fee);
+    } else if (b.city && b.data) {
+      if (b.data.public === station) pub = true;
+      if (b.data.vendor) {
+        const ms = D.MERCHANT_STATIONS[b.data.vendor];
+        if (ms && ms.stations.indexOf(station) >= 0) merchant = true;
+      }
     }
   }
-  return own ? 0 : fee;
+  if (own) return 'own';
+  if (merchant) return 'merchant';
+  if (pub) return 'public';
+  return null;
+};
+
+/** Recargo en oro del mercader (0 si es tuya o pública). */
+W.stationFee = function (station, x, y, r) {
+  if (station === 'hand') return 0;
+  const r2 = r * r;
+  let own = false, pub = false, fee = 1;
+  for (let i = 0; i < W.buildings.length; i++) {
+    const b = W.buildings[i];
+    if (U.dist2(x, y, b.x + b.w / 2, b.y + b.h / 2) > r2) continue;
+    if (b.owner === 'player') {
+      const bd = D.BUILDINGS[b.key];
+      if (bd && bd.functions && bd.functions.indexOf(station) >= 0) own = true;
+    } else if (b.city && b.data) {
+      if (b.data.public === station) pub = true;
+      if (b.data.vendor) {
+        const ms = D.MERCHANT_STATIONS[b.data.vendor];
+        if (ms && ms.stations.indexOf(station) >= 0) fee = Math.min(fee, ms.fee);
+      }
+    }
+  }
+  if (own) return 0;
+  if (fee < 1) return fee;
+  /* Solo pública: sin recargo en oro (la contrapartida es tiempo y leña) */
+  return pub ? 0 : 0;
+};
+
+/** Configuración del taller público cercano para esa estación (o null). */
+W.publicInfo = function (station, x, y, r) {
+  const r2 = r * r;
+  for (let i = 0; i < W.buildings.length; i++) {
+    const b = W.buildings[i];
+    if (!b.city || !b.data || b.data.public !== station) continue;
+    if (U.dist2(x, y, b.x + b.w / 2, b.y + b.h / 2) > r2) continue;
+    const cfg = PUB[b.key];
+    if (!cfg) continue;
+    return {
+      key: b.key, building: b, station: cfg.station, name: cfg.name, glyph: cfg.glyph,
+      cd: cfg.cd === undefined ? D.BAL.PUBLIC_CRAFT_CD : cfg.cd,
+      fuelPlus: cfg.fuelPlus === undefined ? D.BAL.PUBLIC_FUEL_PLUS : cfg.fuelPlus,
+      noQuality: cfg.noQuality !== false, desc: cfg.desc || ''
+    };
+  }
+  return null;
+};
+
+/** Todos los talleres públicos del mundo (para el panel de crafteo). */
+W.publicList = function () {
+  const out = [];
+  for (let i = 0; i < W.buildings.length; i++) {
+    const b = W.buildings[i];
+    if (!b.city || !b.data || !b.data.public) continue;
+    const cfg = PUB[b.key];
+    if (!cfg) continue;
+    out.push({
+      key: b.key, uid: b.uid, x: b.x, y: b.y, station: cfg.station,
+      name: cfg.name, glyph: cfg.glyph, cd: cfg.cd, fuelPlus: cfg.fuelPlus, desc: cfg.desc
+    });
+  }
+  return out;
 };
 
 /* ==========================================================
@@ -1263,7 +1360,6 @@ W.randomTileNear = function (x, y, rMin, rMax, rng) {
   }
   return null;
 };
-/** ¿Respeta la distancia mínima entre grupos y la separación depredador/presa? */
 W.spawnClear = function (sd, x, y, list) {
   const B2 = D.BAL;
   const minD2 = B2.SPAWN_MIN_DIST * B2.SPAWN_MIN_DIST;
@@ -1284,7 +1380,6 @@ W.spawnClear = function (sd, x, y, list) {
   }
   return true;
 };
-/** Tile válido para una especie: bioma, santuario exclusivo y separación. */
 W.speciesSpawnTile = function (species, px, py, rng, list) {
   const sd = D.SPECIES[species];
   if (!sd) return null;
@@ -1305,7 +1400,7 @@ W.speciesSpawnTile = function (species, px, py, rng, list) {
     } else {
       t = W.randomTileNear(px, py, rMin, rMax, rng);
       if (!t) continue;
-      if (t.zone) continue;                       /* los santuarios son exclusivos */
+      if (t.zone) continue;
       if (sd.biomes && sd.biomes.length && sd.biomes.indexOf(t.biome) < 0) continue;
     }
     if (W.cityDist(t.x, t.y) < D.BAL.SPAWN_CITY_BUFFER) continue;
@@ -1401,6 +1496,7 @@ W.deserialize = function (data) {
   }
 };
 
-console.info('[CR] world.js v3 listo · ' + C.WORLD + '² · ' + D.BIOMES.length + ' biomas · ' +
-  D.ZONES.length + ' santuarios · 44 parcelas · 8 granjas · 2 puertas · nodos: ' + NODE_KEYS.length);
+console.info('[CR] world.js v4 listo · ' + C.WORLD + '² · ' + D.BIOMES.length + ' biomas · ' +
+  D.ZONES.length + ' santuarios · 44 parcelas · 8 granjas · 2 puertas · ' +
+  Object.keys(PUB).length + ' talleres públicos en la plaza · nodos: ' + NODE_KEYS.length);
 })();

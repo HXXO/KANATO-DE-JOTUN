@@ -1,20 +1,28 @@
 /* ============================================================
-KANATO DE JOTUN · entities.js — Entidades v3
-· Movimiento analógico: aceleración, frenado, giro suave y pivote.
-· Apuntado pegajoso con histéresis, cono ancho de cerca y ciclo Tab.
-· Combate por canales: ataque / carga / tensado / bloqueo / parry /
-  embate / esquiva. Todos cancelables desde la ventana de cancelación.
-· Arcos con 9 municiones y efectos; escudos con bloqueo y parry.
-· Estados: sangrado, veneno, fuego, ralentización, aturdimiento.
-· IA ecológica: dieta, facción, presas, huida, santuario, ráfagas
-  con telegrafía y descanso. Jefes por fases. Guardianes y errantes.
-· Nivel global → puntos de habilidad (8 ramas) que afectan a todo.
+KANATO DE JOTUN · entities.js v4 — PARTE 1/3
+(CONCATENAR: Parte 1 + Parte 2 + Parte 3 en un solo archivo)
+Cambios v4:
+· Kit inicial: SOLO pico y hacha de piedra (mejora 6).
+· Las herramientas NO se destruyen: al llegar a 0 quedan
+  ROTAS (dur 0) y se reparan barato desde el inventario (mejora 6).
+· Nivel global: además de puntos de rama, sube estadísticas base
+  y da PUNTOS DE RECETA para aprender recetas de tu Tier (mejora 4).
+· Recetas por Tier (1-10 / 11-30 / 31+): gateado por nivel.
+Mantiene todo lo v3: canales de combate, apuntado pegajoso, IA
+ecológica, bosses por fases, tameo, monturas, trabajadores.
 ============================================================ */
 (function () {
 'use strict';
 const CR = window.CR;
 if (!CR || !CR.DATA || !CR.World) { console.error('[CR] entities.js requiere core, data y world'); return; }
-const U = CR.util, C = CR.CONFIG, D = CR.DATA, B = D.BAL, W = CR.World, A = CR.Audio, Bus = CR.Bus;
+const U = CR.util, C = CR.CONFIG, D = CR.DATA, B = D.BAL, W = CR.World, Bus = CR.Bus;
+/* Audio perezoso: funciona aunque audio.js cargue después de este archivo */
+const A = new Proxy({}, { get: function (_, k) {
+  const a = CR.Audio;
+  if (!a) return function () {};
+  const v = a[k];
+  return typeof v === 'function' ? v.bind(a) : v;
+} });
 const sin = Math.sin, cos = Math.cos, PI = Math.PI;
 
 /* ==========================================================
@@ -23,25 +31,25 @@ const sin = Math.sin, cos = Math.cos, PI = Math.PI;
 const _free = [];
 function blankCB() {
   return { dmg: 0, def: 0, reach: 1, cd: 0, combo: 0, comboT: 0, iframe: 0,
-           poison: 0, poisonT: 0, burn: 0, burnT: 0, bleed: 0, bleedT: 0,
-           slow: 0, slowT: 0, stagger: 0, guard: 0 };
+    poison: 0, poisonT: 0, burn: 0, burnT: 0, bleed: 0, bleedT: 0,
+    slow: 0, slowT: 0, stagger: 0, guard: 0 };
 }
 function blankAI() {
   return { state: 'idle', t: 0, phase: 0, target: null, prey: null, threat: null,
-           home: { x: 0, y: 0 }, path: null, pi: 0, wanderT: 0, wx: 0, wy: 0, hasW: false,
-           leash: 12, zone: null, rest: 0, burst: 0, mv: null, mvT: 0, mvPhase: '',
-           giveup: 0, routeI: 0, route: null, atPost: true, perch: true, workT: 0,
-           summonCd: 0, healOnce: false, bond: 0, calm: 0 };
+    home: { x: 0, y: 0 }, path: null, pi: 0, wanderT: 0, wx: 0, wy: 0, hasW: false,
+    leash: 12, zone: null, rest: 0, burst: 0, mv: null, mvT: 0, mvPhase: '',
+    giveup: 0, routeI: 0, route: null, atPost: true, perch: true, workT: 0,
+    summonCd: 0, healOnce: false, bond: 0, calm: 0 };
 }
 function blankTG() {
   return { dead: false, persist: false, baby: false, tamed: false, owner: null,
-           mountable: false, mounted: false, flying: false, saddle: null, petArmor: 0,
-           growDay: 0, tameProgress: 0, sedated: 0, level: 1, hostile: false, boss: false,
-           livestock: false, ready: null, ready2: null, prodT: 0, fed: 0, feedQ: null,
-           role: 'idle', child: false, stage: 'adult', angry: false, respawnDay: 0,
-           scale: 1, tint: '#fff', zone: null, faction: 'neutral', diet: 'none',
-           guardian: null, wanderer: false, hunter: false, lastProduct: 0, deposit: null,
-           elite: false, flyer: false, fireproof: false, iceproof: false };
+    mountable: false, mounted: false, flying: false, saddle: null, petArmor: 0,
+    growDay: 0, tameProgress: 0, sedated: 0, level: 1, hostile: false, boss: false,
+    livestock: false, ready: null, ready2: null, prodT: 0, fed: 0, feedQ: null,
+    role: 'idle', child: false, stage: 'adult', angry: false, respawnDay: 0,
+    scale: 1, tint: '#fff', zone: null, faction: 'neutral', diet: 'none',
+    guardian: null, wanderer: false, hunter: false, lastProduct: 0, deposit: null,
+    elite: false, flyer: false, fireproof: false, iceproof: false };
 }
 function blank() {
   return {
@@ -84,32 +92,30 @@ function alloc() { const e = _free.pop(); return e ? reset(e) : reset(blank()); 
 function release(e) { if (_free.length < 260) _free.push(e); }
 
 /* ==========================================================
-2 · ESTADO
+2 · ESTADO DEL GESTOR
 ========================================================== */
 const E = CR.Ent = {
   list: [], byId: new Map(), player: null,
   hazards: [], projectiles: [], loot: [], day: 1, heat: 0, hitstop: 0,
-  bossState: {}, CAP: B.CAP, WILD_CAP: B.WILD_CAP,
+  bossState: {}, CAP: B.CAP || 230, WILD_CAP: B.WILD_CAP || 88,
   _spawnT: 0, _campT: 0, _uid: 0, _frame: 0,
   _q1: [], _q2: [], _q3: [], _q4: []
 };
 const projPool = new CR.Pool(
   function () { return { x: 0, y: 0, px: 0, py: 0, vx: 0, vy: 0, life: 0, dmg: 0, r: 0.3,
-                         type: 'rock', hostile: true, owner: null, effect: null, pierce: 0,
-                         ammo: null, crit: false, hitIds: [] }; },
+    type: 'rock', hostile: true, owner: null, effect: null, pierce: 0,
+    ammo: null, crit: false, hitIds: [] }; },
   function (p) { p.life = 0; p.owner = null; p.dmg = 0; p.vx = p.vy = 0; p.effect = null;
-                 p.pierce = 0; p.ammo = null; p.crit = false; p.hitIds.length = 0; },
+    p.pierce = 0; p.ammo = null; p.crit = false; p.hitIds.length = 0; },
   32, 128
 );
-/* Feedback de combate consumido por render.js */
 E.aim = { kind: null, ref: null, x: 0, y: 0, r: 0.5, inRange: false, valid: true,
-          lock: null, lockT: 0, node: null, mode: 'melee', draw: 0, cands: [], cycleI: 0 };
+  lock: null, lockT: 0, node: null, mode: 'melee', draw: 0, cands: [], cycleI: 0 };
 E.hitMark = { ref: null, id: 0, t: 0, focusT: 0, crit: false, dmg: 0, lag: 1 };
 E.nodeHit = { node: null, t: 0, focusT: 0 };
 const _qAim = [], _cands = [];
 let _missCd = 0;
 const LOOT_LIFE = 150, BAG_LIFE = 210, LOOT_CAP = 110;
-
 function toast(m, c) { Bus.emit('toast', { msg: m, cls: c || '' }); }
 function fx(k, x, y, ex) { Bus.emit('fx', { kind: k, x: x, y: y, extra: ex || null }); }
 function floater(x, y, t, c) { Bus.emit('floater', { x: x, y: y, text: t, color: c || '#fff' }); }
@@ -120,12 +126,11 @@ function rngLoot() { return CR.streams ? CR.streams.loot : CR.RNG(3); }
 function rngFx() { return CR.streams ? CR.streams.fx : CR.RNG(11); }
 
 /* ==========================================================
-3 · INVENTARIO Y EQUIPO
+3 · INVENTARIO, EQUIPO Y ROTURAS (mejora 6)
 ========================================================== */
 const EQUIP_SLOTS = ['weapon', 'tool', 'shield', 'head', 'chest', 'legs',
-                     'ring', 'belt', 'amulet', 'charm', 'bag1', 'bag2', 'bag3', 'quiver'];
+  'ring', 'belt', 'amulet', 'charm', 'bag1', 'bag2', 'bag3', 'quiver'];
 E.EQUIP_SLOTS = EQUIP_SLOTS;
-
 function hasTag(def, tag) {
   if (!def) return false;
   if (def.tags && def.tags.indexOf(tag) >= 0) return true;
@@ -134,9 +139,58 @@ function hasTag(def, tag) {
   if (tag === 'herbany') return def.id === 'herb' || def.id === 'crop_herb';
   return def.cat === tag;
 }
+/** v4: un objeto con durabilidad 0 está ROTO: permanece en el equipo/mochila. */
+function isBroken(s) { return !!(s && s.dur !== undefined && s.dur <= 0); }
+E.isBroken = isBroken;
+
+/* Punto caminable libre cerca de (x, y); se usa al invocar, desmontar y reaparecer */
+E.freeSpotNear = function (x, y, r) {
+  r = Math.max(1, r || 1);
+  if (W.walkable(Math.floor(x), Math.floor(y), false)) return { x: x, y: y };
+  for (let rad = 0.7; rad <= r + 4; rad += 0.7) {
+    const steps = Math.max(8, Math.round(rad * 8));
+    for (let k = 0; k < steps; k++) {
+      const a = (k / steps) * Math.PI * 2;
+      const nx = x + Math.cos(a) * rad, ny = y + Math.sin(a) * rad;
+      if (W.walkable(Math.floor(nx), Math.floor(ny), false)) return { x: nx, y: ny };
+    }
+  }
+  return { x: x, y: y };
+};
+
+/* Busca un alojamiento propio (gallinero, corral, granero) con hueco para la especie */
+E.findPenSpace = function (p, species) {
+  const bl = W.buildings;
+  for (let i = 0; i < bl.length; i++) {
+    const b = bl[i];
+    if (b.owner !== 'player') continue;
+    const bd = D.BUILDINGS[b.key];
+    if (!bd || !bd.functions || bd.functions.indexOf('livestock') < 0) continue;
+    if (bd.accepts && bd.accepts.indexOf(species) < 0) continue;
+    let n = 0;
+    for (let k = 0; k < E.list.length; k++) {
+      const a = E.list[k];
+      if (a.tg.dead || a.tg.owner !== 'player') continue;
+      if (a.t.x >= b.x - 0.5 && a.t.x <= b.x + b.w + 0.5 && a.t.y >= b.y - 0.5 && a.t.y <= b.y + b.h + 0.5) n++;
+    }
+    if (n >= (bd.cap || 0)) continue;
+    const spot = E.freeSpotNear(b.x + b.w / 2, b.y + b.h / 2, Math.max(b.w, b.h));
+    return { x: spot.x, y: spot.y, uid: b.uid };
+  }
+  return null;
+};
+function maxDurOf(def) {
+  if (!def) return 0;
+  if (def.tool) return def.tool.dur;
+  if (def.weapon) return def.weapon.dur;
+  if (def.shield) return def.shield.dur;
+  return 0;
+}
+E.maxDurOf = maxDurOf;
+
 const Inv = E.Inv = {
   slots(p) {
-    let n = B.INV_SLOTS;
+    let n = B.INV_SLOTS || 24;
     for (let i = 1; i <= 3; i++) {
       const b = p.equip['bag' + i];
       if (b && D.ITEMS[b.id] && D.ITEMS[b.id].bag) n += (D.ITEMS[b.id].bag.slots || 0);
@@ -157,13 +211,14 @@ const Inv = E.Inv = {
   count(p, id) { let n = 0; for (let i = 0; i < p.inv.length; i++) { const s = p.inv[i]; if (s && s.id === id) n += s.n; } return n; },
   countTag(p, tag) { let n = 0; for (let i = 0; i < p.inv.length; i++) { const s = p.inv[i]; if (s && hasTag(D.ITEMS[s.id], tag)) n += s.n; } return n; },
   find(p, id) { for (let i = 0; i < p.inv.length; i++) { const s = p.inv[i]; if (s && s.id === id) return i; } return -1; },
+  findUsable(p, id) { for (let i = 0; i < p.inv.length; i++) { const s = p.inv[i]; if (s && s.id === id && !isBroken(s)) return i; } return -1; },
   firstEmpty(p) { for (let i = 0; i < p.inv.length; i++) if (!p.inv[i]) return i; return -1; },
   add(p, id, n, q, dur) {
     const def = D.ITEMS[id];
     if (!def || n <= 0) return n | 0;
     q = q | 0;
     let left = n | 0;
-    const max = def.stack;
+    const max = def.stack === undefined ? 99 : def.stack;
     if (max > 1) {
       for (let i = 0; i < p.inv.length && left > 0; i++) {
         const s = p.inv[i];
@@ -178,7 +233,7 @@ const Inv = E.Inv = {
       const take = Math.min(max, left);
       const slot = { id: id, n: take, q: q };
       if (dur !== undefined && dur !== null) slot.dur = dur;
-      else if (def.tool || def.weapon || def.shield) slot.dur = def.tool ? def.tool.dur : (def.weapon ? def.weapon.dur : def.shield.dur);
+      else { const md = maxDurOf(def); if (md) slot.dur = md; }
       p.inv[i] = slot; left -= take;
     }
     if (left < n) Bus.emit('loot', { id: id, n: n - left, q: q });
@@ -212,7 +267,6 @@ const Inv = E.Inv = {
     s.n -= take; if (s.n <= 0) p.inv[i] = null;
     return true;
   },
-  /** Combustible disponible en unidades de fuego. */
   fuel(p) {
     let n = 0;
     for (let i = 0; i < p.inv.length; i++) {
@@ -240,35 +294,169 @@ const Inv = E.Inv = {
   }
 };
 
+/* ---------- Desgaste v4: rompe sin borrar ---------- */
+function wearSlot(p, s, equipKey, n) {
+  if (!s || s.dur === undefined || s.dur <= 0) return;
+  s.dur = Math.max(0, s.dur - (n || 1));
+  if (s.dur === 0) {
+    const def = D.ITEMS[s.id];
+    toast((def ? def.name : 'Objeto') + ' se ha ROTO. Sigue en tu equipo: repárala desde el inventario.', 'bad');
+    A.play('error');
+    Bus.emit('broke', { id: s.id, slot: equipKey });
+    E.recalc(p);
+  }
+}
+E.wearSlot = wearSlot;
+E.wearTool = function (p, n) { wearSlot(p, p.equip.tool, 'tool', n); };
+E.wearWeapon = function (p, n) { wearSlot(p, p.equip.weapon, 'weapon', n); };
+E.wearShield = function (p, n) { wearSlot(p, p.equip.shield, 'shield', n); };
+
+/* ---------- Reparación barata (mejora 6) ---------- */
+const REPAIR_DEFAULT = {
+  stone: { stone: 2, wood: 1 }, copper: { copper_bar: 1, wood: 1 },
+  iron: { iron_bar: 1, wood: 1 }, steel: { steel_bar: 1, wood: 1 },
+  obsidian: { obsidian_bar: 1, wood: 1 }, mithril: { mithril_bar: 1, wood: 1 },
+  adamantite: { adamantite_bar: 1, wood: 1 }
+};
+function repairCostFor(id) {
+  const def = D.ITEMS[id];
+  if (!def) return null;
+  if (def.repair) return def.repair;
+  const pre = String(id).split('_')[0];
+  if (REPAIR_DEFAULT[pre]) return REPAIR_DEFAULT[pre];
+  if (def.shield) return { wood: 2, hide: 1 };
+  if (def.weapon || def.tool) return { wood: 2, fiber: 2 };
+  return { wood: 1, fiber: 1 };
+}
+E.repairCostFor = repairCostFor;
+function repairCan(p, id) {
+  const cost = repairCostFor(id);
+  const miss = [];
+  for (const k in cost) if (Inv.count(p, k) < cost[k]) miss.push(k);
+  return { cost: cost, can: miss.length === 0, missing: miss };
+}
+function doRepair(p, id, setter) {
+  const chk = repairCan(p, id);
+  if (!chk.can) {
+    const names = chk.missing.map(function (m) { return D.ITEMS[m] ? D.ITEMS[m].name : m; }).join(', ');
+    toast('Falta para reparar: ' + names, 'bad');
+    A.play('error');
+    return { ok: false, msg: 'Faltan materiales: ' + names };
+  }
+  for (const k in chk.cost) Inv.remove(p, k, chk.cost[k]);
+  const def = D.ITEMS[id];
+  setter(maxDurOf(def));
+  E.recalc(p);
+  A.play('craft');
+  fx('spark', p.t.x, p.t.y);
+  toast(def.name + ' reparada al 100 %.', 'good');
+  Bus.emit('repaired', { id: id });
+  return { ok: true, msg: def.name + ' reparada.' };
+}
+/** Repara una ranura de la mochila (idx). */
+E.repairInvSlot = function (p, idx) {
+  const s = p.inv[idx];
+  if (!s || s.dur === undefined) return { ok: false, msg: 'Nada que reparar.' };
+  if (s.dur >= maxDurOf(D.ITEMS[s.id])) return { ok: false, msg: 'Ya está en perfecto estado.' };
+  return doRepair(p, s.id, function (max) { s.dur = max; });
+};
+/** Repara un slot equipado ('weapon'|'tool'|'shield'|...). */
+E.repairEquip = function (p, key) {
+  const s = p.equip[key];
+  if (!s || s.dur === undefined) return { ok: false, msg: 'Nada que reparar.' };
+  if (s.dur >= maxDurOf(D.ITEMS[s.id])) return { ok: false, msg: 'Ya está en perfecto estado.' };
+  return doRepair(p, s.id, function (max) { s.dur = max; });
+};
+/** Información de reparación para la UI: {broken, cost, can, missing, dur, max}. */
+E.repairInfo = function (p, ref) {
+  let s = null;
+  if (typeof ref === 'number') s = p.inv[ref];
+  else s = p.equip[ref];
+  if (!s || s.dur === undefined) return null;
+  const def = D.ITEMS[s.id];
+  const max = maxDurOf(def);
+  const chk = repairCan(p, s.id);
+  return { id: s.id, name: def.name, broken: s.dur <= 0, dur: s.dur, max: max,
+    cost: chk.cost, can: chk.can, missing: chk.missing };
+};
+
 /* ==========================================================
-4 · NIVEL GLOBAL, PUNTOS Y OFICIOS
+4 · NIVEL, OFICIOS, TIERS Y RECETAS (mejora 4)
 ========================================================== */
 const TRADES = ['mining', 'woodcut', 'fishing', 'farming', 'combat', 'cooking', 'crafting'];
 E.TRADES = TRADES; E.SKILLS = TRADES;
 const TRADE_NAME = { mining: 'Minería', woodcut: 'Tala', fishing: 'Pesca', farming: 'Agricultura',
-                     combat: 'Combate', cooking: 'Cocina', crafting: 'Oficio' };
+  combat: 'Combate', cooking: 'Cocina', crafting: 'Oficio' };
 E.skillName = function (s) { return TRADE_NAME[s] || s; };
 E.levelOf = function (p, trade) {
   const s = p.xp[trade]; if (!s) return 0;
+  const tbl = B.TRADE_TABLE || B.XP_TABLE || [0];
   let lv = 0;
-  for (let i = 0; i < B.TRADE_TABLE.length; i++) if (s.xp >= B.TRADE_TABLE[i]) lv = i;
-  return Math.min(B.TRADE_TABLE.length - 1, lv);
+  for (let i = 0; i < tbl.length; i++) if (s.xp >= tbl[i]) lv = i;
+  return Math.min(tbl.length - 1, lv);
 };
 E.globalLevel = function (p) { return p.lvl ? p.lvl.level : 1; };
 E.skillVal = function (p, key) {
-  if (!p.lvl) return 0;
+  if (!p.lvl || !D.SKILLS) return 0;
   let v = 0;
   for (let i = 0; i < D.SKILLS.length; i++) {
     const sk = D.SKILLS[i], n = p.lvl.alloc[sk.id] || 0;
-    if (n && sk.per[key] !== undefined) v += sk.per[key] * n;
+    if (n && sk.per && sk.per[key] !== undefined) v += sk.per[key] * n;
   }
   return v;
 };
-E.unlocked = function (p, skillId, n) { return (p.lvl.alloc[skillId] || 0) >= n; };
+E.unlocked = function (p, skillId, n) { return (p.lvl && (p.lvl.alloc[skillId] || 0)) >= n; };
+
+/* --- Tiers de recetas por nivel (mejora 4) --- */
+function tierBounds() { return B.TIER_BOUNDS || [10, 30, 40]; }
+E.tierOfLevel = function (lv) {
+  const b = tierBounds();
+  if (lv <= b[0]) return 1;
+  if (lv <= b[1]) return 2;
+  return 3;
+};
+E.playerTier = function (p) { return E.tierOfLevel(p.lvl ? p.lvl.level : 1); };
+function recipeTier(r) {
+  if (r.tier) return r.tier;
+  const lv = (r.req && r.req.lv) || 1;
+  return E.tierOfLevel(lv);
+}
+E.recipeTier = recipeTier;
+/** ¿Está una receta disponible para el jugador? (Tier + aprendizaje elegido) */
+E.recipeUnlocked = function (p, r) {
+  if (!r) return { ok: false, why: 'recipe' };
+  const tier = recipeTier(r);
+  if (tier > E.playerTier(p)) return { ok: false, why: 'tier', tier: tier };
+  if (r.station === 'hand' || r.learn === false) return { ok: true, why: '' };
+  if (r.learn === true || r.learn === 1) {
+    return (p.lvl.known && p.lvl.known[r.id]) ? { ok: true, why: '' } : { ok: false, why: 'learn', tier: tier };
+  }
+  return { ok: true, why: '' };
+};
+/** Aprende una receta marcable con 1 punto de receta. */
+E.learnRecipe = function (p, recipeId) {
+  let r = null;
+  for (let i = 0; i < D.RECIPES.length; i++) if (D.RECIPES[i].id === recipeId) { r = D.RECIPES[i]; break; }
+  if (!r) return { ok: false, msg: 'Receta desconocida.' };
+  if (p.lvl.known && p.lvl.known[r.id]) return { ok: false, msg: 'Ya la conoces.' };
+  const tier = recipeTier(r);
+  if (tier > E.playerTier(p)) return { ok: false, msg: 'Requiere Tier ' + tier + ' (nivel ' + (tier === 2 ? (tierBounds()[0] + 1) : (tierBounds()[1] + 1)) + '+).' };
+  if (!(r.learn === true || r.learn === 1)) return { ok: false, msg: 'Esta receta se desbloquea sola con tu Tier.' };
+  if ((p.lvl.rp || 0) <= 0) return { ok: false, msg: 'Sin puntos de receta: sube de nivel.' };
+  p.lvl.rp--;
+  if (!p.lvl.known) p.lvl.known = {};
+  p.lvl.known[r.id] = 1;
+  const out = D.ITEMS[r.out.id];
+  A.play('levelup');
+  toast('Receta aprendida: ' + (out ? out.name : r.id), 'gold');
+  Bus.emit('recipe:learned', { id: r.id });
+  return { ok: true, msg: 'Receta aprendida.' };
+};
+
 E.addXP = function (p, trade, amount) {
   if (!p || amount <= 0) return;
   let amt = amount;
-  if (p.buffs.bless > 0) amt *= (1 + B.BLESS_XP);
+  if (p.buffs && p.buffs.bless > 0) amt *= (1 + (B.BLESS_XP || 0.1));
   if (p.xp[trade]) {
     const before = E.levelOf(p, trade);
     p.xp[trade].xp += amt;
@@ -280,23 +468,29 @@ E.addXP = function (p, trade, amount) {
       Bus.emit('levelup', { skill: trade, level: after });
     }
   }
+  if (!p.lvl) return;
   const lv0 = p.lvl.level;
   p.lvl.xp += amt;
-  p.lvl.level = D.levelFromXP(p.lvl.xp);
+  p.lvl.level = D.levelFromXP ? D.levelFromXP(p.lvl.xp) : p.lvl.level;
   if (p.lvl.level > lv0) {
-    const gain = D.pointsForLevel(p.lvl.level) - D.pointsForLevel(lv0);
-    p.lvl.points += gain;
+    const gained = p.lvl.level - lv0;
+    const pts = (D.pointsForLevel ? D.pointsForLevel(p.lvl.level) : p.lvl.level) -
+                (D.pointsForLevel ? D.pointsForLevel(lv0) : lv0);
+    p.lvl.points += pts;
+    /* v4: cada nivel da 1 punto de receta para elegir qué aprender */
+    p.lvl.rp = (p.lvl.rp || 0) + gained;
     A.play('freedom');
     fx('legend', p.t.x, p.t.y);
-    Bus.emit('banner', { title: 'NIVEL ' + p.lvl.level, sub: '+' + gain + ' punto(s) de habilidad. Pulsa H para repartirlos.' });
-    toast('Nivel ' + p.lvl.level + ': +' + gain + ' punto(s) de habilidad.', 'gold');
-    Bus.emit('globallevel', { level: p.lvl.level, points: p.lvl.points });
+    Bus.emit('banner', { title: 'NIVEL ' + p.lvl.level,
+      sub: '+' + pts + ' habilidad · +' + gained + ' punto(s) de receta · Tier ' + E.playerTier(p) });
+    toast('Nivel ' + p.lvl.level + ': +' + pts + ' puntos de rama, +' + gained + ' de receta. Tus estadísticas base suben.', 'gold');
+    Bus.emit('globallevel', { level: p.lvl.level, points: p.lvl.points, rp: p.lvl.rp });
   }
   E.recalc(p);
   Bus.emit('xp', { skill: trade, amount: amt, level: p.lvl.level });
 };
 E.allocPoint = function (p, skillId) {
-  const sk = D.SKILL_BY_ID[skillId];
+  const sk = D.SKILL_BY_ID ? D.SKILL_BY_ID[skillId] : null;
   if (!sk) return { ok: false, msg: 'Rama desconocida.' };
   if (p.lvl.points <= 0) return { ok: false, msg: 'No tienes puntos libres.' };
   const cur = p.lvl.alloc[skillId] || 0;
@@ -305,7 +499,7 @@ E.allocPoint = function (p, skillId) {
   p.lvl.points--;
   E.recalc(p);
   A.play('levelup');
-  const un = sk.unlocks[cur + 1];
+  const un = sk.unlocks ? sk.unlocks[cur + 1] : null;
   toast(sk.name + ' ' + (cur + 1) + (un ? ' · ' + un : ''), 'gold');
   Bus.emit('alloc', { skill: skillId, value: cur + 1 });
   return { ok: true, msg: sk.name + ' mejorada.' };
@@ -320,7 +514,7 @@ E.respec = function (p) {
 };
 
 /* ==========================================================
-5 · RECÁLCULO DE ESTADÍSTICAS
+5 · RECÁLCULO DE ESTADÍSTICAS (nivel + equipo, roto no cuenta)
 ========================================================== */
 E.recalc = function (p) {
   if (!p || !p.equip) return;
@@ -328,7 +522,7 @@ E.recalc = function (p) {
   let tameB = 0, petB = 0, stealth = 0, iceRes = 0, slowAura = 0;
   for (let i = 0; i < EQUIP_SLOTS.length; i++) {
     const s = p.equip[EQUIP_SLOTS[i]];
-    if (!s) continue;
+    if (!s || isBroken(s)) continue;              /* v4: lo roto no aporta */
     const d2 = D.ITEMS[s.id];
     if (!d2) continue;
     if (d2.armor) def += d2.armor.def;
@@ -345,47 +539,55 @@ E.recalc = function (p) {
     }
   }
   const sv = function (k) { return E.skillVal(p, k); };
-  def += sv('def');
+  /* v4: estadísticas base que crecen con el nivel (mejora 4) */
+  const lv = p.lvl ? p.lvl.level : 1;
+  const hpPer = B.HP_PER_LEVEL === undefined ? 3 : B.HP_PER_LEVEL;
+  const stPer = B.ST_PER_LEVEL === undefined ? 2 : B.ST_PER_LEVEL;
+  def += sv('def') + Math.floor((lv - 1) * (B.DEF_PER_LEVEL === undefined ? 0.5 : B.DEF_PER_LEVEL));
   p.cb.def = Math.round(def);
-  p.regen = regen + B.REGEN_BASE;
+  p.regen = regen + (B.REGEN_BASE || 0.35);
   p.luck = luck; p.stealth = U.clamp(stealth, 0, 0.7);
   p.iceRes = U.clamp(iceRes, 0, 0.8); p.slowAura = slowAura;
-  p.critChance = U.clamp(B.CRIT + crit + luck * 0.5, 0, 0.6);
+  p.critChance = U.clamp((B.CRIT || 0.1) + crit + luck * 0.5, 0, 0.6);
   p.speedMul = 1 + sv('speed') + spd;
-  p.meleeMul = 1 + sv('melee') + meleeB + E.levelOf(p, 'combat') * B.XP_LEVEL_BONUS;
+  p.meleeMul = 1 + sv('melee') + meleeB + E.levelOf(p, 'combat') * (B.XP_LEVEL_BONUS || B.LEVEL_BONUS || 0.035);
   p.rangedMul = 1 + sv('ranged');
   p.drawMul = U.clamp(1 + sv('draw') + drawB, 0.35, 1.4);
   p.tameMul = 1 + sv('tame') + tameB;
   p.petDmgMul = 1 + sv('petDmg') + petB;
-  p.rollCdBase = Math.max(0.3, B.ROLL_CD * (1 + sv('rollCd')) + rollCd);
-  p.stRegen = B.ST_REGEN_IDLE + sv('stRegen');
-  const sh = p.equip.shield ? D.ITEMS[p.equip.shield.id] : null;
-  p.shield = sh && sh.shield ? sh.shield : null;
+  p.rollCdBase = Math.max(0.3, (B.ROLL_CD || 0.85) * (1 + sv('rollCd')) + rollCd);
+  p.stRegen = (B.ST_REGEN_IDLE || 7.5) + sv('stRegen');
+
+  const shSlot = p.equip.shield;
+  const sh = (shSlot && !isBroken(shSlot)) ? D.ITEMS[shSlot.id] : null;
+  p.shield = (sh && sh.shield) ? sh.shield : null;
   p.blockReduce = p.shield ? U.clamp(p.shield.reduce + sv('block'), 0, 0.95) : 0;
   p.parryWindow = p.shield ? (p.shield.parry + sv('parry')) : 0;
-  const newHp = Math.round(B.HP + sv('hp') + hpB);
+
+  const newHp = Math.round((B.HP || 100) + (lv - 1) * hpPer + sv('hp') + hpB);
   if (newHp !== p.st.maxHp) {
     const r = p.st.hp / Math.max(1, p.st.maxHp);
     p.st.maxHp = newHp; p.st.hp = U.clamp(Math.round(newHp * r), 1, newHp);
   }
-  const newSt = Math.round(B.ST + sv('st') + stB);
+  const newSt = Math.round((B.ST || 100) + (lv - 1) * stPer + sv('st') + stB);
   if (newSt !== p.st.maxSt) {
     const r = p.st.st / Math.max(1, p.st.maxSt);
     p.st.maxSt = newSt; p.st.st = U.clamp(Math.round(newSt * r), 0, newSt);
   }
-  const w = p.equip.weapon ? D.ITEMS[p.equip.weapon.id] : null;
-  p.weapon = w && w.weapon ? w.weapon : null;
+  const wSlot = p.equip.weapon;
+  const w = (wSlot && !isBroken(wSlot)) ? D.ITEMS[wSlot.id] : null;
+  p.weapon = (w && w.weapon) ? w.weapon : null;
   p.isBow = !!(p.weapon && (p.weapon.kind === 'bow' || p.weapon.kind === 'crossbow'));
-  p.cb.dmg = Math.round((p.weapon ? p.weapon.dmg : 4) * p.meleeMul);
+  p.cb.dmg = Math.round(((p.weapon ? p.weapon.dmg : 4) + Math.floor((lv - 1) * 0.5)) * p.meleeMul);
   p.cb.reach = p.weapon ? p.weapon.reach : 1.0;
   Inv.resize(p);
 };
-
 E.equipFromSlot = function (p, i) {
   const s = p.inv[i];
   if (!s) return { ok: false, msg: 'Ranura vacía.' };
   const def = D.ITEMS[s.id];
   if (!def) return { ok: false, msg: 'Objeto desconocido.' };
+  if (isBroken(s)) return { ok: false, msg: def.name + ' está ROTA. Repárala primero.' };
   let slot = null;
   if (def.weapon) slot = 'weapon';
   else if (def.shield) slot = 'shield';
@@ -458,166 +660,9 @@ E.ammoInfo = function (p) {
   if (!def || !def.ammo) return null;
   return { id: p.ammoId, def: def, n: Inv.count(p, p.ammoId), kind: def.ammo.kind, dmg: def.ammo.dmg, effect: def.ammo.effect };
 };
-
 /* ==========================================================
-7 · USO DE OBJETOS
-========================================================== */
-E.useItem = function (p, id) {
-  const def = D.ITEMS[id];
-  if (!def) return { ok: false, msg: 'Objeto desconocido.' };
-  if (def.heal) {
-    if (p.cast) return { ok: false, msg: 'Ya estás aplicando algo.' };
-    const h = def.heal;
-    if (h.instant) {
-      if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-      applyHeal(p, h);
-      A.play('drink'); fx('heal', p.t.x, p.t.y);
-      return { ok: true, msg: def.name + ' usado.' };
-    }
-    if (Inv.count(p, id) < 1) return { ok: false, msg: 'No lo tienes.' };
-    p.cast = { id: id, t: 0, dur: h.cast || 1.2 };
-    A.play('open');
-    return { ok: true, msg: 'Aplicando ' + def.name.toLowerCase() + '…' };
-  }
-  if (def.food) {
-    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-    const f = def.food;
-    p.st.food = U.clamp(p.st.food + (f.food || 0), 0, p.st.maxFood);
-    if (f.hp) p.st.hp = U.clamp(p.st.hp + f.hp, 0, p.st.maxHp);
-    if (f.st) p.st.st = U.clamp(p.st.st + f.st, 0, p.st.maxSt);
-    if (f.cure) cure(p, f.cure);
-    if (f.buff) p.buffs[f.buff] = Math.max(p.buffs[f.buff] || 0, f.buffT || 180);
-    A.play((f.food || 0) > 0 ? 'eat' : 'drink');
-    fx('heal', p.t.x, p.t.y);
-    floater(p.t.x, p.t.y - 0.6, '+' + (f.food || f.hp || f.st || 0), '#8fe08f');
-    return { ok: true, msg: def.name + ' consumido.' };
-  }
-  if (def.bed) {
-    if (def.bed.portable) { Bus.emit('sleep:request', { mode: 'roll' }); return { ok: true, msg: 'Extendiendo el petate…' }; }
-    const x = Math.floor(p.t.x), y = Math.floor(p.t.y);
-    const chk = W.canPlace(id, x, y, 'player');
-    if (!chk.ok) return { ok: false, msg: chk.reason };
-    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-    const r = W.addBuilding(id, x, y, 'player', {});
-    if (!r.ok) { Inv.add(p, id, 1); return { ok: false, msg: r.reason }; }
-    A.play('build'); fx('dust', x + 0.5, y + 0.5);
-    E.syncGuardians();
-    return { ok: true, msg: def.name + ' colocada.' };
-  }
-  if (def.saddle) {
-    const near = E.nearestTamedMountable(p, def.saddle.for);
-    if (!near) return { ok: false, msg: 'Acércate a un ' + (D.SPECIES[def.saddle.for] ? D.SPECIES[def.saddle.for].name.toLowerCase() : 'animal') + ' adulto tameado.' };
-    const sd = D.SPECIES[def.saddle.for];
-    if (sd && sd.mount && sd.mount.req && !D.meetsReq(sd.mount.req, p.lvl.level, p.lvl.alloc))
-      return { ok: false, msg: 'Requiere ' + D.reqText(sd.mount.req) + '.' };
-    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-    near.tg.mountable = true; near.tg.saddle = def.saddle.for;
-    near.st.maxSt = (sd && sd.mount) ? sd.mount.stam : 120; near.st.st = near.st.maxSt;
-    A.play('mount'); fx('spark', near.t.x, near.t.y);
-    return { ok: true, msg: '¡' + near.name + ' ya puede montarse!' };
-  }
-  if (def.pet) {
-    const near = E.nearestCompanion(p);
-    if (!near) return { ok: false, msg: 'Acércate a tu compañero o montura.' };
-    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-    near.tg.petArmor = def.pet.def;
-    A.play('craft');
-    return { ok: true, msg: near.name + ' protegido con barda (+' + def.pet.def + ' def).' };
-  }
-  if (def.animal) {
-    const sp = def.animal.species, sd = D.SPECIES[sp];
-    if (!sd) return { ok: false, msg: 'Especie desconocida.' };
-    if (sd.livestock) {
-      const pen = E.findPenSpace(p, sp);
-      if (!pen) return { ok: false, msg: 'Necesitas un alojamiento con espacio (gallinero, corral o granero).' };
-      if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-      E.spawnCreature(sp, pen.x, pen.y, { persist: true, tamed: true, owner: 'player', livestock: true, home: pen });
-      A.play('buy');
-      return { ok: true, msg: sd.name + ' alojado.' };
-    }
-    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-    const spot = E.freeSpotNear(p.t.x, p.t.y, 2);
-    E.spawnCreature(sp, spot.x, spot.y, { persist: true, tamed: true, owner: 'player' });
-    A.play('buy');
-    return { ok: true, msg: sd.name + ' invocado. Necesita silla para montarlo.' };
-  }
-  if (id === 'repair_kit') {
-    let did = false;
-    ['weapon', 'tool', 'shield'].forEach(function (k) {
-      const s = p.equip[k]; if (!s || s.dur === undefined) return;
-      const dd = D.ITEMS[s.id]; if (!dd) return;
-      const max = dd.tool ? dd.tool.dur : (dd.weapon ? dd.weapon.dur : dd.shield.dur);
-      if (s.dur < max) { s.dur = Math.min(max, s.dur + Math.round(max * 0.4)); did = true; }
-    });
-    if (!did) return { ok: false, msg: 'Tu equipo está como nuevo.' };
-    Inv.remove(p, id, 1); A.play('craft');
-    return { ok: true, msg: 'Equipo reparado un 40 %.' };
-  }
-  if (id === 'whetstone') {
-    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
-    p.buffs.sharp = 86400 / (1440 / (C.DAY_REAL_MS / 60000));
-    p.buffs.sharp = 600;
-    A.play('craft');
-    return { ok: true, msg: 'Filo afilado: +15 % de daño un rato.' };
-  }
-  if (id === 'fishing_net') { Bus.emit('net:request', {}); return { ok: true, msg: 'Lanzando la red…' }; }
-  if (def.ammo || def.bag || def.tool || def.weapon || def.shield || def.armor || def.acc) {
-    const i = Inv.find(p, id);
-    if (i >= 0) return E.equipFromSlot(p, i);
-    return { ok: false, msg: 'No lo tienes.' };
-  }
-  if (def.seed || def.fert || def.feed) return { ok: false, msg: 'Úsalo sobre el terreno o el animal con Interactuar.', hint: true };
-  if (id === 'dart_narcotic' || id === 'dart_poison') { E.throwDart(p, id); return { ok: true, msg: 'Dardo lanzado.' }; }
-  return { ok: false, msg: 'No se puede usar así.' };
-};
-function applyHeal(p, h) {
-  if (h.instant) {
-    if (h.instant.hp) p.st.hp = U.clamp(p.st.hp + h.instant.hp, 0, p.st.maxHp);
-    if (h.instant.st) p.st.st = U.clamp(p.st.st + h.instant.st, 0, p.st.maxSt);
-    if (h.instant.food) p.st.food = U.clamp(p.st.food + h.instant.food, 0, p.st.maxFood);
-  }
-  if (h.hp) p.st.hp = U.clamp(p.st.hp + h.hp, 0, p.st.maxHp);
-  if (h.st) p.st.st = U.clamp(p.st.st + h.st, 0, p.st.maxSt);
-  if (h.stopBleed) { p.cb.bleed = 0; p.cb.bleedT = 0; }
-  if (h.cure) cure(p, h.cure);
-  if (h.regen) { p.buffs.regen = h.regenT || 20; p.regenBonus = h.regen; }
-  if (h.buff) p.buffs[h.buff] = Math.max(p.buffs[h.buff] || 0, h.buffT || 180);
-  floater(p.t.x, p.t.y - 0.7, '+' + ((h.instant && h.instant.hp) || h.hp || 0), '#8fe08f');
-}
-function cure(p, what) {
-  if (what === 'poison') { p.cb.poison = 0; p.cb.poisonT = 0; }
-  else if (what === 'burn') { p.cb.burn = 0; p.cb.burnT = 0; }
-  else if (what === 'bleed') { p.cb.bleed = 0; p.cb.bleedT = 0; }
-  else if (what === 'slow') { p.cb.slow = 0; p.cb.slowT = 0; }
-}
-E.findPenSpace = function (p, species) {
-  const list = W.playerBuildings();
-  for (let i = 0; i < list.length; i++) {
-    const b = list[i], bd = D.BUILDINGS[b.key];
-    if (!bd || !bd.functions || bd.functions.indexOf('livestock') < 0) continue;
-    if (bd.accepts && bd.accepts.indexOf(species) < 0) continue;
-    let count = 0;
-    for (let k = 0; k < E.list.length; k++) {
-      const e = E.list[k];
-      if (e.tg.dead || !e.tg.livestock || e.tg.owner !== 'player') continue;
-      if (e.t.x >= b.x - 0.5 && e.t.x <= b.x + b.w + 0.5 && e.t.y >= b.y - 0.5 && e.t.y <= b.y + b.h + 0.5) count++;
-    }
-    if (count < (bd.cap || 3)) return { x: b.x + b.w / 2, y: b.y + b.h / 2, building: b };
-  }
-  return null;
-};
-E.freeSpotNear = function (x, y, r) {
-  const rng = rngAI();
-  for (let i = 0; i < 28; i++) {
-    const a = rng.next() * U.TAU, d = 0.8 + rng.next() * r;
-    const tx = x + cos(a) * d, ty = y + sin(a) * d;
-    if (W.walkable(Math.floor(tx), Math.floor(ty), false)) return { x: tx, y: ty };
-  }
-  return { x: x, y: y };
-};
-
-/* ==========================================================
-8 · CREACIÓN
+8 · CREACIÓN DE ENTIDADES
+   v4: el jugador empieza SOLO con pico y hacha de piedra.
 ========================================================== */
 function register(e) { e.id = ++E._uid; E.list.push(e); E.byId.set(e.id, e); return e; }
 
@@ -640,35 +685,28 @@ E.createPlayer = function (name, gender) {
   p.quick = [null, null, null, null, null];
   p.xp = {};
   for (let i = 0; i < TRADES.length; i++) p.xp[TRADES[i]] = { xp: 0 };
-  p.lvl = { xp: 0, level: 1, points: 0, alloc: {} };
+  /* v4: el estado de progresión incluye saberes (known) y puntos de receta (rp) */
+  p.lvl = { xp: 0, level: 1, points: 0, alloc: {}, known: {}, rp: 0 };
   for (let i = 0; i < D.SKILLS.length; i++) p.lvl.alloc[D.SKILLS[i].id] = 0;
   p.gold = 0; p.debt = B.DEBT; p.free = false; p.bank = 0;
   p.buffs = { bless: 0 };
   p.ammoId = null;
   p.ko = false; p.mount = null;
-  p.act = null; p.blk = { on: false, t: 0, bashCd: 0 };
-  p.cast = null;
+  p.act = null; p.blk = { on: false, t: 0, bashCd: 0 }; p.cast = null;
   p.rollT = 0; p.rollCd = 0; p.rollAng = 0;
   p.foodAcc = 0; p.stepAcc = 0; p.gatherCd = 0;
   p.regenBonus = 0;
   for (let i = 0; i < B.INV_SLOTS; i++) p.inv.push(null);
+  /* Ropas de esclavo: vestidas, no entregadas en mochila */
   p.equip.head = { id: 'cloth_head' };
   p.equip.chest = { id: 'cloth_chest' };
   p.equip.legs = { id: 'cloth_legs' };
+  /* --- MEJORA 6: pico y hacha de piedra, NADA MÁS --- */
   Inv.add(p, 'pick_stone', 1);
   Inv.add(p, 'axe_stone', 1);
-  Inv.add(p, 'shield_buckler', 1);
-  Inv.add(p, 'bow_wood', 1);
-  Inv.add(p, 'arrow_basic', 24);
-  Inv.add(p, 'bandage_simple', 3);
-  Inv.add(p, 'bread', 3);
-  Inv.add(p, 'berry', 5);
-  Inv.add(p, 'torch', 1);
   const ti = Inv.find(p, 'pick_stone');
   if (ti >= 0) { const s = p.inv[ti]; p.equip.tool = { id: s.id, dur: s.dur }; p.inv[ti] = null; }
-  const si = Inv.find(p, 'shield_buckler');
-  if (si >= 0) { const s = p.inv[si]; p.equip.shield = { id: s.id, dur: s.dur }; p.inv[si] = null; }
-  p.quick[0] = 'bread'; p.quick[1] = 'bandage_simple'; p.quick[2] = 'axe_stone'; p.quick[3] = 'pick_stone'; p.quick[4] = 'bow_wood';
+  p.quick[2] = 'axe_stone'; p.quick[3] = 'pick_stone';
   E.recalc(p);
   E.autoAmmo(p);
   E.player = p;
@@ -711,7 +749,8 @@ E.spawnCreature = function (species, x, y, opts) {
   const rng = rngAI();
   if (sd.baby && !o.tamed && !o.noBaby && rng.chance(sd.baby.chance)) makeBaby(e, sd);
   if (o.baby) makeBaby(e, sd);
-  if (!o.tamed && !sd.livestock && sd.kind !== 'boss' && W.city) {
+  /* Nivel por lejanía de Vhalor (1-6): más vida, daño y comidas de tameo */
+  if (!o.tamed && !sd.livestock && sd.kind !== 'boss' && sd.kind !== 'humanoid' && W.city) {
     const cc = W.city, dd = U.len(x - (cc.x + cc.w / 2), y - (cc.y + cc.h / 2));
     const lv = U.clamp(1 + Math.floor(dd / 70) + (rng.chance(0.3) ? 1 : 0), 1, 6);
     e.tg.level = lv;
@@ -737,7 +776,6 @@ function makeBaby(e, sd) {
   e.cb.dmg = 0; e.tg.hostile = false;
   e.tg.growDay = E.day + sd.baby.days;
 }
-
 E.spawnNPCs = function () {
   const ids = Object.keys(D.NPCS);
   for (let i = 0; i < ids.length; i++) {
@@ -788,6 +826,7 @@ E.spawnWanderers = function () {
     let alive = false;
     for (let k = 0; k < E.list.length; k++) if (E.list[k].npcId === id && !E.list[k].tg.dead) { alive = true; break; }
     if (alive) continue;
+    if (!W.routes.length) continue;
     const route = W.routes[i % W.routes.length];
     const st = route[0];
     const e = spawnNpc(id, st.x + 0.5, st.y + 0.5);
@@ -800,6 +839,7 @@ E.spawnWanderers = function () {
     let alive = false;
     for (let k = 0; k < E.list.length; k++) if (E.list[k].npcId === id && !E.list[k].tg.dead) { alive = true; break; }
     if (alive) continue;
+    if (!W.hunterPosts.length) continue;
     const post = W.hunterPosts[i % W.hunterPosts.length];
     const e = spawnNpc(id, post.x + 0.5, post.y + 0.5);
     e.ai.leash = post.r;
@@ -882,9 +922,9 @@ const RADIUS = 0.3;
 function fits(x, y, flying) {
   const r = RADIUS;
   return W.walkable(Math.floor(x - r), Math.floor(y - r), flying) &&
-         W.walkable(Math.floor(x + r), Math.floor(y - r), flying) &&
-         W.walkable(Math.floor(x - r), Math.floor(y + r), flying) &&
-         W.walkable(Math.floor(x + r), Math.floor(y + r), flying);
+    W.walkable(Math.floor(x + r), Math.floor(y - r), flying) &&
+    W.walkable(Math.floor(x - r), Math.floor(y + r), flying) &&
+    W.walkable(Math.floor(x + r), Math.floor(y + r), flying);
 }
 function move(e, dx, dy, flying) {
   const t = e.t;
@@ -936,23 +976,32 @@ function requestPath(e, tx, ty, flying) {
 /* ==========================================================
 10 · DAÑO, ESTADOS Y MUERTE
 ========================================================== */
-function applyStatus(t, o, src) {
+function applyStatus(t, o) {
   if (o.poison && !t.tg.fireproof) { t.cb.poison = Math.max(t.cb.poison, o.poison); t.cb.poisonT = Math.max(t.cb.poisonT, B.POISON_TIME); }
   if (o.burn && !t.tg.fireproof) { t.cb.burn = Math.max(t.cb.burn, o.burn); t.cb.burnT = Math.max(t.cb.burnT, B.BURN_TIME); }
   if (o.bleed) { t.cb.bleed = Math.max(t.cb.bleed, o.bleed); t.cb.bleedT = Math.max(t.cb.bleedT, B.BLEED_TIME); }
   if (o.slow && !t.tg.iceproof) { t.cb.slow = Math.max(t.cb.slow, o.slow); t.cb.slowT = Math.max(t.cb.slowT, o.slowT || B.SLOW_TIME); }
-  if (o.stagger) { t.cb.stagger = Math.max(t.cb.stagger, o.stagger); if (t.ai) { t.ai.mv = null; t.ai.mvPhase = ''; t.ai.burst = 0; t.ai.rest = Math.max(t.ai.rest, o.stagger); } }
+  if (o.stagger) {
+    t.cb.stagger = Math.max(t.cb.stagger, o.stagger);
+    if (t.ai) { t.ai.mv = null; t.ai.mvPhase = ''; t.ai.burst = 0; t.ai.rest = Math.max(t.ai.rest, o.stagger); }
+  }
 }
-/** Bloqueo y parry: devuelve el multiplicador de daño final. */
+/** Bloqueo y parry del jugador. Devuelve el multiplicador de daño final. */
 function guardMitigate(t, src, o) {
   if (t.type !== 'player' || !t.blk || !t.blk.on || !t.shield || o.dot) return 1;
-  const dx = src ? src.t.x - t.t.x : cos(t.t.ang), dy = src ? src.t.y - t.t.y : sin(t.t.ang);
+  const dx = src && src.t ? src.t.x - t.t.x : cos(t.t.ang);
+  const dy = src && src.t ? src.t.y - t.t.y : sin(t.t.ang);
   const ang = Math.atan2(dy, dx);
   const off = Math.abs(U.angDelta(t.t.ang, ang));
   if (off > t.shield.arc * 0.5) return 1;
+  /* Parry: ventana inicial */
   if (t.blk.t <= t.parryWindow) {
     t.st.st = U.clamp(t.st.st + B.PARRY_ST_REFUND, 0, t.st.maxSt);
-    if (src && src.ai) { src.ai.rest = Math.max(src.ai.rest, B.PARRY_STAGGER); src.ai.mv = null; src.ai.mvPhase = ''; src.cb.stagger = B.PARRY_STAGGER; }
+    if (src && src.ai) {
+      src.ai.rest = Math.max(src.ai.rest, B.PARRY_STAGGER);
+      src.ai.mv = null; src.ai.mvPhase = '';
+      src.cb.stagger = B.PARRY_STAGGER;
+    }
     t.parryFlash = 0.35;
     A.play('crit', { rate: 1.5 });
     fx('spark', t.t.x + cos(ang) * 0.6, t.t.y + sin(ang) * 0.6);
@@ -961,6 +1010,7 @@ function guardMitigate(t, src, o) {
     Bus.emit('parry', { target: t, src: src });
     return B.PARRY_MULT;
   }
+  /* Bloqueo normal: cuesta stamina; sin stamina, guardia rota */
   const cost = B.ST_BLOCK_HIT * (t.shield.weight || 1);
   if (t.st.st < cost) {
     t.cb.guard = B.GUARD_BREAK_ST * 3;
@@ -971,8 +1021,11 @@ function guardMitigate(t, src, o) {
   }
   t.st.st -= cost;
   const red = t.blockReduce * (o.guardBreak ? (1 - o.guardBreak) : 1);
-  const s = t.equip.shield;
-  if (s && s.dur !== undefined) { s.dur -= 1; if (s.dur <= 0) { t.equip.shield = null; toast('Tu escudo se ha roto.', 'bad'); E.recalc(t); } }
+  /* v4: el escudo se desgasta y, al romperse, QUEDA equipado (dur 0) */
+  if (t.equip.shield) {
+    E.wearShield(t, 1);
+    if (isBroken(t.equip.shield)) { t.blk.on = false; t.parryFlash = 0; }
+  }
   A.play('hit', { rate: 0.7, vol: 0.7 });
   fx('spark', t.t.x + cos(ang) * 0.5, t.t.y + sin(ang) * 0.5);
   if (t.shield && t.shield.ward) return Math.max(0.04, 1 - red) * 0.6;
@@ -985,7 +1038,7 @@ E.damage = function (target, amount, src, opts) {
   if (target.cb.iframe > 0 && !o.dot) return 0;
   if (o.burn && target.tg.fireproof) return 0;
   if (o.slow && target.tg.iceproof) o.slow = 0;
-  let mul = guardMitigate(target, src, o);
+  const mul = guardMitigate(target, src, o);
   const def = target.cb.def + (target.tg.petArmor || 0);
   let dmg = amount * mul * (1 - def / (def + B.DEF_K));
   if (target.type === 'player') {
@@ -994,7 +1047,7 @@ E.damage = function (target, amount, src, opts) {
   }
   let crit = false;
   if (!o.dot && src && src.type === 'player' && mul >= 1) {
-    if (rngLoot().chance(target === E.player ? 0 : (src.critChance || B.CRIT))) { dmg *= B.CRIT_MULT; crit = true; }
+    if (rngLoot().chance((src.critChance || B.CRIT) + (o.critBonus || 0))) { dmg *= B.CRIT_MULT; crit = true; }
   }
   if (o.crit) { dmg *= B.CRIT_MULT; crit = true; }
   dmg = Math.max(1, Math.round(dmg));
@@ -1003,14 +1056,14 @@ E.damage = function (target, amount, src, opts) {
   target.an.hurt = 0.28;
   if (!o.dot) {
     target.cb.iframe = target.type === 'player' ? 0.3 : 0.1;
-    if (src && o.knock !== false) {
+    if (src && src.t && o.knock !== false) {
       const dx = target.t.x - src.t.x, dy = target.t.y - src.t.y;
       const d = U.len(dx, dy) || 1;
       const k = (o.knock || B.KNOCKBACK) * (target.tg.boss ? 0.22 : 1) * (mul < 1 ? 0.3 : 1);
       target.v.x += (dx / d) * k; target.v.y += (dy / d) * k;
     }
   }
-  applyStatus(target, o, src);
+  applyStatus(target, o);
   if (o.drainSt && target.type === 'player') target.st.st = Math.max(0, target.st.st - o.drainSt);
   if (o.lifesteal && src && !src.tg.dead) src.st.hp = Math.min(src.st.maxHp, src.st.hp + dmg * o.lifesteal);
   floater(target.t.x, target.t.y - 0.7, (crit ? '¡' : '') + dmg + (crit ? '!' : ''),
@@ -1037,22 +1090,19 @@ E.damage = function (target, amount, src, opts) {
 };
 function tickDots(e, dt) {
   if (e.cb.poisonT > 0) {
-    e.cb.poisonT -= dt;
-    e.st.hp -= e.cb.poison * dt;
+    e.cb.poisonT -= dt; e.st.hp -= e.cb.poison * dt;
     if (rngFx().chance(dt * 4)) fx('poison', e.t.x, e.t.y);
     if (e.cb.poisonT <= 0) e.cb.poison = 0;
     if (e.st.hp <= 0) { kill(e, null); return; }
   }
   if (e.cb.burnT > 0) {
-    e.cb.burnT -= dt;
-    e.st.hp -= e.cb.burn * dt;
+    e.cb.burnT -= dt; e.st.hp -= e.cb.burn * dt;
     if (rngFx().chance(dt * 6)) fx('fire', e.t.x, e.t.y);
     if (e.cb.burnT <= 0) e.cb.burn = 0;
     if (e.st.hp <= 0) { kill(e, null); return; }
   }
   if (e.cb.bleedT > 0) {
-    e.cb.bleedT -= dt;
-    e.st.hp -= e.cb.bleed * dt;
+    e.cb.bleedT -= dt; e.st.hp -= (e.cb.bleed || B.BLEED_DPS) * dt;
     if (rngFx().chance(dt * 3)) fx('hit', e.t.x, e.t.y, { crit: false });
     if (e.cb.bleedT <= 0) e.cb.bleed = 0;
     if (e.st.hp <= 0) { kill(e, null); return; }
@@ -1061,6 +1111,7 @@ function tickDots(e, dt) {
   if (e.cb.stagger > 0) e.cb.stagger = Math.max(0, e.cb.stagger - dt);
   if (e.cb.guard > 0) e.cb.guard = Math.max(0, e.cb.guard - dt);
 }
+/** Al caer el jugador, todo el mundo lo olvida (animales, bandidos, guardias). */
 function forgetPlayer() {
   const p = E.player;
   E.heat = 0;
@@ -1080,12 +1131,13 @@ function forgetPlayer() {
   }
 }
 E.forgetPlayer = forgetPlayer;
-
 function kill(e, src) {
   if (e.tg.dead) return;
   if (e.type === 'player') {
-    e.st.hp = 0; e.ko = true; e.act = null; e.blk.on = false; e.cast = null;
-    forgetPlayer(); A.play('die'); shake(12);
+    e.st.hp = 0; e.ko = true;
+    e.act = null; e.blk.on = false; e.cast = null;
+    forgetPlayer();
+    A.play('die'); shake(12);
     Bus.emit('ko', { player: e });
     return;
   }
@@ -1111,10 +1163,9 @@ function kill(e, src) {
       A.playAt('coin', e.t.x, e.t.y, p.t.x, p.t.y);
     }
     if (sd.boss) {
-      drops.push({ id: sd.boss.unique, n: 1, q: 0 });
-      toast('¡Botín único: ' + D.ITEMS[sd.boss.unique].name + '!', 'gold');
+      if (D.ITEMS[sd.boss.unique]) { drops.push({ id: sd.boss.unique, n: 1, q: 0 }); toast('¡Botín único: ' + D.ITEMS[sd.boss.unique].name + '!', 'gold'); }
       fx('legend', e.t.x, e.t.y);
-      E.bossState[e.species] = { respawnDay: E.day + sd.boss.respawn };
+      E.bossState[e.species] = { respawnDay: E.day + (sd.boss.respawn || B.BOSS_RESPAWN) };
     }
     if (e.tg.livestock && e.tg.owner === 'player') toast(e.name + ' ha muerto.', 'bad');
     E.dropLoot(e.t.x, e.t.y, drops, { life: e.tg.boss ? 330 : undefined });
@@ -1128,7 +1179,7 @@ function kill(e, src) {
 E.kill = kill;
 
 /* ==========================================================
-11 · BOTÍN
+11 · BOTÍN EN EL SUELO
 ========================================================== */
 E.dropLoot = function (x, y, items, opts) {
   const o = opts || {}, list = [];
@@ -1161,7 +1212,7 @@ E.dropLoot = function (x, y, items, opts) {
   const bag = list.length > 1;
   const life = o.life || (bag ? BAG_LIFE : LOOT_LIFE);
   const l = { uid: U.uid(), x: px, y: py, items: list, bag: bag, life: life, max: life, age: 0,
-              pickT: o.delay === undefined ? 0.5 : o.delay, retry: 0, warned: false, manual: !!o.manual };
+    pickT: o.delay === undefined ? 0.5 : o.delay, retry: 0, warned: false, manual: !!o.manual };
   if (E.loot.length >= LOOT_CAP) E.loot.shift();
   E.loot.push(l);
   return l;
@@ -1212,11 +1263,10 @@ function updateLoot(dt) {
 }
 
 /* ==========================================================
-12 · APUNTADO PEGAJOSO
+12 · APUNTADO PEGAJOSO (cono, histéresis, Tab)
 ========================================================== */
 function aimAngle(p) {
   const I = CR.Input;
-  /* Arco: manda el arrastre del botón de ataque (preciso, medido por la línea) */
   if (p.isBow && I.bowAim.active) return I.bowAim.ang;
   if (I.aimFresh() && CR.Camera && CR.Camera.screenToWorld) {
     const w = CR.Camera.screenToWorld(I.pointer.x, I.pointer.y);
@@ -1232,29 +1282,12 @@ function aimAngle(p) {
 function toolInfo(p) {
   const s = p.equip.tool;
   if (!s) return null;
+  if (isBroken(s)) return null;                 /* v4: rota = no funciona */
   const def = D.ITEMS[s.id];
   if (!def || !def.tool) return null;
   return { id: s.id, def: def, kind: def.tool.kind, pow: def.tool.pow, slot: s };
 }
 E.toolInfo = toolInfo;
-function wearTool(p, n) {
-  const s = p.equip.tool;
-  if (!s || s.dur === undefined) return;
-  s.dur -= n;
-  if (s.dur <= 0) {
-    toast((D.ITEMS[s.id] ? D.ITEMS[s.id].name : 'Herramienta') + ' se ha roto.', 'bad');
-    p.equip.tool = null; A.play('error'); E.recalc(p);
-  }
-}
-function wearWeapon(p) {
-  const s = p.equip.weapon;
-  if (!s || s.dur === undefined) return;
-  s.dur -= 1;
-  if (s.dur <= 0) {
-    toast((D.ITEMS[s.id] ? D.ITEMS[s.id].name : 'Arma') + ' se ha roto.', 'bad');
-    p.equip.weapon = null; A.play('error'); E.recalc(p);
-  }
-}
 /** Nodo pegajoso: prioriza el que ya estabas golpeando. */
 function nodeTarget(p, ang) {
   const ax = cos(ang), ay = sin(ang);
@@ -1283,14 +1316,13 @@ function nodeTarget(p, ang) {
   return best;
 }
 function coneFor(d) {
-  if (d < 0.85) return -0.25;                       /* pegado: acepta cualquier dirección */
+  if (d < 0.85) return -0.25;                    /* pegado: acepta cualquier dirección */
   if (d < B.AIM_NEAR_DIST) return cos(B.AIM_CONE_NEAR);
   return cos(B.AIM_CONE);
 }
 function targetable(p, t) {
   if (!t || t === p || t.tg.dead) return false;
   if (t.tg.tamed || t.type === 'worker') return false;
-  if (t.type === 'npc' && !t.tg.angry) return true;
   return true;
 }
 function updateAim(p, dt) {
@@ -1312,7 +1344,7 @@ function updateAim(p, dt) {
   const assist = CR.Settings.values.aimAssist;
   const bow = p.isBow;
   a.mode = bow ? 'bow' : 'melee';
-  a.draw = p.act && p.act.kind === 'draw' ? U.clamp(p.act.draw / (B.DRAW_FULL * p.drawMul), 0, 1) : 0;
+  a.draw = (p.act && p.act.kind === 'draw') ? U.clamp(p.act.draw / (B.DRAW_FULL * p.drawMul), 0, 1) : 0;
   const reach = bow ? B.AIM_MAX_RANGE : (p.cb.reach + (p.mount ? 0.4 : 0));
   const searchR = reach + (bow ? 1.5 : 1.6);
   W.Hash.query(p.t.x, p.t.y, searchR, _qAim);
@@ -1327,7 +1359,6 @@ function updateAim(p, dt) {
     const cone = coneFor(d) - (assist - 1) * 0.22;
     if (dot < cone) continue;
     const inR = d <= reach + (t.tg.scale || 1) * 0.32;
-    /* Puntuación: alineación manda, distancia desempata, en rango bonifica */
     const score = dot * 3.2 - d * 0.24 + (inR ? 1.1 : 0) - (t.type === 'npc' && !t.tg.angry ? 2.4 : 0);
     _cands.push({ e: t, d: d, dot: dot, inR: inR, score: score });
   }
@@ -1342,25 +1373,24 @@ function updateAim(p, dt) {
     A.play('click');
     floater(nx.e.t.x, nx.e.t.y - 1.2, 'objetivo', '#f3cf7a');
   }
-  /* Histéresis: conserva el objetivo fijado salvo que otro sea claramente mejor */
+  /* Histéresis: conserva el fijado salvo que otro sea claramente mejor */
   let chosen = null;
   if (a.lock && !a.lock.tg.dead) {
     for (let i = 0; i < _cands.length; i++) {
       if (_cands[i].e === a.lock) {
         const l = _cands[i];
-        if (l.d <= searchR * 1.25 && l.dot > coneFor(l.d) - 0.45) { chosen = l; }
+        if (l.d <= searchR * 1.25 && l.dot > coneFor(l.d) - 0.45) chosen = l;
         break;
       }
     }
     if (chosen && _cands.length && _cands[0].e !== a.lock &&
-        _cands[0].score - chosen.score > B.AIM_SWITCH_MARGIN * (2 - assist * 0.5) && a.lockT <= 0) {
+      _cands[0].score - chosen.score > B.AIM_SWITCH_MARGIN * (2 - assist * 0.5) && a.lockT <= 0) {
       chosen = _cands[0];
     }
   }
   if (!chosen && _cands.length) chosen = _cands[0];
   if (chosen) { a.lock = chosen.e; if (a.lockT <= 0) a.lockT = B.AIM_LOCK_TIME; }
   else if (a.lock && (a.lock.tg.dead || a.lockT <= 0)) a.lock = null;
-
   const n = nodeTarget(p, ang);
   const ti = toolInfo(p);
   let nodeOk = false;
@@ -1368,7 +1398,7 @@ function updateAim(p, dt) {
     const nd = D.NODES[n.key];
     nodeOk = !!nd && (nd.tool === 'hand' || (ti && nd.tool === ti.kind && ti.pow >= nd.pow));
   }
-  /* Entidad dentro de alcance gana al nodo; si no, el nodo gana. */
+  /* Entidad en alcance gana al nodo; si no, el nodo gana */
   if (chosen && chosen.inR) {
     a.kind = 'entity'; a.ref = chosen.e; a.x = chosen.e.t.x; a.y = chosen.e.t.y;
     a.r = 0.5 * (chosen.e.tg.scale || 1) + 0.12; a.valid = true; a.inRange = true;
@@ -1376,7 +1406,6 @@ function updateAim(p, dt) {
     return;
   }
   if (n && nodeOk && !bow) {
-    const nd = D.NODES[n.key];
     a.kind = 'node'; a.ref = n; a.node = n;
     a.x = n.x + 0.5; a.y = n.y + 0.5; a.r = 0.62;
     a.valid = true; a.inRange = true;
@@ -1390,7 +1419,6 @@ function updateAim(p, dt) {
     return;
   }
   if (n) {
-    const nd = D.NODES[n.key];
     a.kind = 'node'; a.ref = n; a.node = n;
     a.x = n.x + 0.5; a.y = n.y + 0.5; a.r = 0.62;
     a.valid = nodeOk; a.inRange = true; a.mode = 'tool';
@@ -1398,7 +1426,7 @@ function updateAim(p, dt) {
 }
 
 /* ==========================================================
-13 · RECOLECCIÓN
+13 · RECOLECCIÓN (desgaste v4: rompe sin borrar)
 ========================================================== */
 function gather(p, n) {
   const def = D.NODES[n.key];
@@ -1420,7 +1448,7 @@ function gather(p, n) {
   E.nodeHit.node = n; E.nodeHit.t = 0.28; E.nodeHit.focusT = 2.5;
   E.aim.node = n;
   if (!res.broke) floater(n.x + 0.5, n.y + 0.1, Math.max(0, n.hp) + '/' + def.hits, '#f3cf7a');
-  if (def.tool !== 'hand') wearTool(p, 1);
+  if (def.tool !== 'hand') E.wearTool(p, 1);
   sfxAt(def.tool === 'axe' ? 'chop' : def.tool === 'pick' ? 'pick' : 'harvest', n.x + 0.5, n.y + 0.5);
   fx(def.tool === 'axe' ? 'wood' : def.tool === 'pick' ? 'stone' : 'leaf', n.x + 0.5, n.y + 0.5, { tint: def.tint });
   shake(1.5);
@@ -1445,13 +1473,14 @@ function gather(p, n) {
   }
   return true;
 }
-
 /* ==========================================================
 14 · CANALES DE ACCIÓN DEL JUGADOR
+   ataque / carga pesada / tensado / embate / esquiva.
+   Todos cancelables desde la ventana de cancelación.
 ========================================================== */
 function canCancel(p) {
   if (!p.act) return true;
-  if (p.act.kind === 'draw') return true;
+  if (p.act.kind === 'draw' || p.act.kind === 'charge') return true;
   if (p.act.phase === 'recover') return true;
   return p.act.elapsed >= B.CANCEL_WINDOW;
 }
@@ -1484,8 +1513,8 @@ function startDraw(p) {
   if (p.st.st < B.ST_DRAW) { toast('Sin stamina para tensar.', 'bad'); A.play('error'); return false; }
   p.st.st -= B.ST_DRAW;
   p.act = { kind: 'draw', elapsed: 0, draw: 0, phase: 'draw' };
-  p.an.draw = 1;
-  A.play('open', { rate: 0.8, vol: 0.5 });
+  p.an.draw = 0;
+  A.play('draw', { vol: 0.5 });
   return true;
 }
 function releaseArrow(p) {
@@ -1494,7 +1523,7 @@ function releaseArrow(p) {
   const full = B.DRAW_FULL * p.drawMul;
   const k = U.clamp(a.draw / full, 0, 1);
   p.act = null; p.an.draw = 0;
-  if (a.draw < B.DRAW_MIN * p.drawMul) { return; }
+  if (a.draw < B.DRAW_MIN * p.drawMul) { A.play('click'); return; }
   const am = E.ammoInfo(p);
   if (!am || am.n < 1) { toast('Sin munición.', 'bad'); A.play('error'); return; }
   if (p.st.st < B.ST_SHOT) { toast('Sin stamina.', 'bad'); return; }
@@ -1504,17 +1533,19 @@ function releaseArrow(p) {
   const dmg = (p.weapon ? p.weapon.dmg : 8) * mul;
   const ang = aimAngle(p);
   p.t.ang = ang;
-  const spd = B.ARROW_SPEED * (p.weapon && p.weapon.kind === 'crossbow' ? 1.25 : 1) * (0.7 + k * 0.3);
-  const pierce = (am.kind === 'mythril' ? 2 : 0) + (p.weapon && p.weapon.pierce ? p.weapon.pierce : 0) + (E.unlocked(p, 'marks', 4) ? 1 : 0);
-  spawnProjectile(p, p.t.x + cos(ang) * 8, p.t.y + sin(ang) * 8, spd, dmg, 'arrow', {
+  const cross = !!(p.weapon && p.weapon.kind === 'crossbow');
+  const spd = B.ARROW_SPEED * (cross ? 1.25 : 1) * (0.7 + k * 0.3);
+  const pierce = (am.kind === 'mythril' ? 2 : 0) +
+    (p.weapon && p.weapon.pierce ? p.weapon.pierce : 0) +
+    (E.unlocked(p, 'marks', 4) ? 1 : 0);
+  spawnProjectile(p, p.t.x + cos(ang) * 0.5, p.t.y + sin(ang) * 0.5, spd, dmg, cross ? 'bolt' : 'arrow', {
     hostile: false, effect: am.effect, pierce: pierce, ammo: am.kind,
-    crit: k > 0.96 && rngLoot().chance(p.critChance + 0.15), r: 0.28, life: B.ARROW_LIFE,
-    ang: ang
+    crit: k > 0.96 && rngLoot().chance(p.critChance + 0.15), r: 0.28, life: B.ARROW_LIFE, ang: ang
   });
-  wearWeapon(p);
-  p.cb.cd = (p.weapon && p.weapon.kind === 'crossbow') ? 0.85 : 0.3;
+  E.wearWeapon(p, 1);
+  p.cb.cd = cross ? 0.85 : 0.3;
   p.an.atk = 0.2;
-  A.play('swing', { rate: 1.6 });
+  A.play('shot');
   fx('slash', p.t.x + cos(ang) * 0.6, p.t.y + sin(ang) * 0.6, { ang: ang, combo: 0 });
   E.autoAmmo(p);
   Bus.emit('shot', { ammo: am.kind, power: k });
@@ -1541,7 +1572,7 @@ function resolveMelee(p) {
   W.Hash.query(p.t.x, p.t.y, reach + 0.9, E._q1);
   let hitAny = false, hits = 0;
   const maxHits = a.heavy ? 4 : (p.cb.combo === 3 ? 3 : 2);
-  /* Objetivo fijado primero: garantiza que el golpe va a quien apuntas */
+  /* Objetivo fijado primero: el golpe va a quien apuntas */
   const ordered = [];
   if (E.aim.lock && !E.aim.lock.tg.dead) ordered.push(E.aim.lock);
   for (let i = 0; i < E._q1.length; i++) if (ordered.indexOf(E._q1[i]) < 0) ordered.push(E._q1[i]);
@@ -1554,11 +1585,11 @@ function resolveMelee(p) {
     const dot = d < 0.7 ? 1 : (dx / d) * cos(ang) + (dy / d) * sin(ang);
     if (dot < (d < B.AIM_NEAR_DIST ? -0.1 : 0.28)) continue;
     let dmg = p.cb.dmg * mult;
-    if (t.st.hp / t.st.maxHp < 0.2 && E.unlocked(p, 'might', 10)) dmg *= 1.6;
+    if (t.st.hp / t.st.maxHp < 0.2 && E.unlocked(p, 'might', 10)) dmg = 1.6;
     E.damage(t, dmg, p, ex);
     hitAny = true; hits++;
   }
-  if (hitAny) { wearWeapon(p); if (a.heavy || p.cb.combo === 3) shake(4); }
+  if (hitAny) { E.wearWeapon(p, 1); if (a.heavy || p.cb.combo === 3) shake(4); }
   else if (E.aim.kind === 'entity' && !E.aim.inRange && _missCd <= 0) {
     _missCd = 0.8; floater(E.aim.x, E.aim.y - 0.9, 'Muy lejos', '#b3a482');
   }
@@ -1581,7 +1612,7 @@ function mountAttack(m) {
 E.playerAttack = function () {
   const p = E.player;
   if (!p || p.ko || p.cast) return;
-  if (p.blk.on) { E.bash(p); return; }
+  if (p.blk && p.blk.on) { E.bash(p); return; }
   if (p.cb.cd > 0 || !canCancel(p)) return;
   const ang = aimAngle(p);
   p.t.ang = ang;
@@ -1600,12 +1631,12 @@ E.playerAttack = function () {
 };
 E.bash = function (p) {
   if (!p || !p.shield) { toast('Necesitas un escudo equipado.', 'bad'); return; }
-  if (p.blk.bashCd > 0 || p.st.st < B.ST_BASH) return;
+  if (!p.blk || p.blk.bashCd > 0 || p.st.st < B.ST_BASH) return;
   p.st.st -= B.ST_BASH;
   p.blk.bashCd = B.BASH_CD;
   p.act = { kind: 'bash', elapsed: 0, phase: 'active', hit: false, wind: 0, active: 0.12, recover: 0.24, ang: p.t.ang };
   p.an.atk = 0.24;
-  A.play('swing', { rate: 0.8 });
+  A.play('bash');
   const strong = E.unlocked(p, 'guard', 5);
   const reach = 1.5;
   W.Hash.query(p.t.x, p.t.y, reach + 0.8, E._q1);
@@ -1649,7 +1680,7 @@ E.doRoll = function () {
   p.cb.iframe = B.ROLL_IFRAMES;
   const f = CR.Input.getFace();
   p.rollAng = f !== null ? f : p.t.ang;
-  p.blk.on = false;
+  if (p.blk) p.blk.on = false;
   A.play('swing', { rate: 1.4 });
   fx('dust', p.t.x, p.t.y);
   if (E.unlocked(p, 'swiftness', 6)) p.counterWindow = 0.5;
@@ -1658,7 +1689,7 @@ E.throwDart = function (p, id) {
   if (!Inv.remove(p, id, 1)) { toast('No lo tienes.', 'bad'); return; }
   const ang = aimAngle(p);
   p.t.ang = ang;
-  spawnProjectile(p, p.t.x + cos(ang) * 8, p.t.y + sin(ang) * 8, 14, id === 'dart_poison' ? 6 : 1, 'dart', {
+  spawnProjectile(p, p.t.x + cos(ang) * 0.5, p.t.y + sin(ang) * 0.5, 14, id === 'dart_poison' ? 6 : 1, 'dart', {
     hostile: false, effect: id === 'dart_poison' ? 'poison' : 'sedate', pierce: 0, r: 0.24, life: 1.6, ang: ang
   });
   A.play('swing', { rate: 1.8 });
@@ -1670,7 +1701,7 @@ E.mount = function (m) {
   if (!m.tg.tamed || !m.tg.mountable || m.tg.baby) { toast('Necesita ser adulto, tameado y con silla.', 'bad'); return false; }
   p.mount = m; m.tg.mounted = true;
   m.ai.state = 'ridden'; m.ai.path = null; m.ai.mv = null;
-  p.act = null; p.blk.on = false;
+  p.act = null; if (p.blk) p.blk.on = false;
   A.play('mount');
   Bus.emit('mounted', { entity: m, flying: m.tg.flying });
   return true;
@@ -1717,12 +1748,12 @@ function updatePlayer(dt) {
   p.cb.iframe = Math.max(0, p.cb.iframe - dt);
   p.an.atk = Math.max(0, p.an.atk - dt);
   p.an.hurt = Math.max(0, p.an.hurt - dt);
-  p.blk.bashCd = Math.max(0, p.blk.bashCd - dt);
+  if (p.blk) p.blk.bashCd = Math.max(0, p.blk.bashCd - dt);
   if (p.parryFlash > 0) p.parryFlash -= dt;
   if (p.counterWindow > 0) p.counterWindow -= dt;
   for (const k in p.buffs) if (p.buffs[k] > 0) p.buffs[k] = Math.max(0, p.buffs[k] - dt);
-  if (p.ko) { I.clearAll(); E.aim.kind = null; E.aim.ref = null; p.act = null; p.blk.on = false; return; }
-
+  if (p.ko) { I.clearAll(); E.aim.kind = null; E.aim.ref = null; p.act = null; if (p.blk) p.blk.on = false; return; }
+  /* Saciedad, hambre y regeneración */
   p.foodAcc += dt;
   while (p.foodAcc >= B.FOOD_TICK) { p.foodAcc -= B.FOOD_TICK; p.st.food = Math.max(0, p.st.food - 1); }
   if (p.st.food <= 0) {
@@ -1735,8 +1766,7 @@ function updatePlayer(dt) {
   if (regen > 0 && p.st.hp < p.st.maxHp) p.st.hp = Math.min(p.st.maxHp, p.st.hp + regen * dt);
   tickDots(p, dt);
   if (p.tg.dead || p.ko) return;
-
-  /* --- Canal de aplicación (vendas) --- */
+  /* Canal de aplicación (vendas, ungüentos) */
   if (p.cast) {
     p.cast.t += dt;
     const m0 = I.getMove();
@@ -1751,18 +1781,19 @@ function updatePlayer(dt) {
       p.cast = null;
     }
   }
-
-  /* --- Bloqueo: canal independiente, se puede alzar casi siempre --- */
+  /* Bloqueo: canal independiente con parry inicial */
   const wantBlock = I.isHeld('block') && !!p.shield && !p.mount && !p.cast && p.cb.guard <= 0;
   if (wantBlock) {
     if (!p.blk.on) {
       if (canCancel(p)) {
         if (p.act && p.act.kind === 'draw') { p.act = null; p.an.draw = 0; }
-        if (p.act && p.act.kind === 'melee' && p.act.phase === 'wind') { /* no cancela el golpe ya lanzado */ }
-        else { p.act = null; p.blk.on = true; p.blk.t = 0; A.play('open', { rate: 1.3, vol: 0.5 }); }
+        else if (!(p.act && p.act.kind === 'melee' && p.act.phase === 'wind')) {
+          p.act = null; p.blk.on = true; p.blk.t = 0;
+          A.play('block', { vol: 0.5 });
+        }
       }
     }
-  } else if (p.blk.on) { p.blk.on = false; }
+  } else if (p.blk.on) p.blk.on = false;
   if (p.blk.on) {
     p.blk.t += dt;
     p.an.block = Math.min(1, p.an.block + dt * 8);
@@ -1770,8 +1801,7 @@ function updatePlayer(dt) {
     if (p.st.st <= 0) { p.blk.on = false; p.cb.guard = B.GUARD_BREAK_ST * 2; }
     if (CR.Settings.values.autoBlock && p.cb.stagger > 0) p.blk.on = false;
   } else p.an.block = Math.max(0, p.an.block - dt * 8);
-
-  /* --- Entradas de acción --- */
+  /* Entradas de acción */
   if (I.consume('roll')) E.doRoll();
   if (I.consume('mount')) E.toggleMount();
   if (I.consume('ammo')) E.cycleAmmo(p);
@@ -1788,18 +1818,17 @@ function updatePlayer(dt) {
       } else if (p.cb.cd <= 0 && canCancel(p)) E.playerAttack();
     } else if (p.cb.cd <= 0 && canCancel(p)) E.playerAttack();
   }
-  /* Soltar el botón dispara / suelta la carga */
+  /* Soltar el botón dispara o suelta la carga */
   if (!atkHeld) {
     if (p.act && p.act.kind === 'draw') releaseArrow(p);
     else if (p.act && p.act.kind === 'charge') {
       const heavy = p.act.draw >= B.HEAVY_CHARGE;
-      p.act = null;
+      p.act = null; p.an.draw = 0;
       if (p.cb.cd <= 0) startMelee(p, heavy);
     }
     I.clearBowAim();
   }
-
-  /* --- Progreso del canal activo --- */
+  /* Progreso del canal activo */
   if (p.act) {
     const a = p.act;
     a.elapsed += dt;
@@ -1811,14 +1840,16 @@ function updatePlayer(dt) {
       a.draw += dt;
       p.an.draw = U.clamp(a.draw / B.HEAVY_CHARGE, 0, 1);
       if (a.draw >= B.HEAVY_CHARGE * 1.8) { p.act = null; startMelee(p, true); }
+    } else if (a.kind === 'bash') {
+      if (a.phase === 'active' && a.elapsed >= a.active) { a.phase = 'recover'; a.elapsed = 0; }
+      else if (a.phase === 'recover' && a.elapsed >= a.recover) p.act = null;
     } else {
       if (a.phase === 'wind' && a.elapsed >= a.wind) { a.phase = 'active'; a.elapsed = 0; if (a.kind === 'melee') resolveMelee(p); }
       else if (a.phase === 'active' && a.elapsed >= a.active) { a.phase = 'recover'; a.elapsed = 0; }
-      else if (a.phase === 'recover' && a.elapsed >= a.recover) { p.act = null; }
+      else if (a.phase === 'recover' && a.elapsed >= a.recover) p.act = null;
     }
   }
-
-  /* --- Movimiento analógico con pivote --- */
+  /* Movimiento analógico con pivote */
   const m = I.getMove();
   const face = I.getFace();
   const pivoting = m.mag > 0.02 && m.mag < C.PIVOT_MAG;
@@ -1827,9 +1858,8 @@ function updatePlayer(dt) {
   if (p.isBow && I.bowAim.active) p.t.ang = I.bowAim.ang;
   else if (I.aimFresh()) p.t.ang = U.angDamp(p.t.ang, aimAngle(p), B.TURN_RATE * 1.4, dt);
   else if (face !== null) p.t.ang = U.angDamp(p.t.ang, face, pivoting ? B.PIVOT_RATE : B.TURN_RATE, dt);
-
-  const sprint = I.isHeld('sprint') && moving && p.st.st > 1 && !p.mount && !p.blk.on &&
-                 (!E.unlocked(p, 'swiftness', 10));
+  const sprint = I.isHeld('sprint') && moving && p.st.st > 1 && !p.mount && !(p.blk.on) &&
+    (!E.unlocked(p, 'swiftness', 10));
   let base = sprint ? B.SPRINT : B.SPEED;
   base *= p.speedMul;
   if (p.st.food < B.ST_FOOD_MIN) base *= 0.75;
@@ -1838,7 +1868,6 @@ function updatePlayer(dt) {
   if (p.act && (p.act.kind === 'draw' || p.act.kind === 'charge')) base *= 0.45;
   if (p.cast) base *= 0.3;
   if (p.cb.stagger > 0) base *= 0.25;
-
   if (p.mount) {
     const mo = p.mount, sd = D.SPECIES[mo.species];
     const ms = ((sd && sd.mount) ? sd.mount.speed : 5) * (sprint ? 1.15 : 1) * (p.cb.slow > 0 ? (1 - p.cb.slow) : 1);
@@ -1900,7 +1929,7 @@ function updatePlayer(dt) {
     const decay = Math.pow(0.001, dt);
     p.v.x *= decay; p.v.y *= decay;
   }
-  /* Aura de ralentización del Basilisco */
+  /* Aura de ralentización (Mirada del Basilisco) */
   if (p.slowAura > 0) {
     W.Hash.query(p.t.x, p.t.y, 2.2, E._q4);
     for (let i = 0; i < E._q4.length; i++) {
@@ -1915,7 +1944,162 @@ function updatePlayer(dt) {
 }
 
 /* ==========================================================
-16 · INTERACCIÓN CONTEXTUAL
+16 · USO DE OBJETOS (comida, curas, camas, colocables)
+========================================================== */
+function applyHeal(p, h) {
+  if (h.instant) {
+    if (h.instant.hp) p.st.hp = U.clamp(p.st.hp + h.instant.hp, 0, p.st.maxHp);
+    if (h.instant.st) p.st.st = U.clamp(p.st.st + h.instant.st, 0, p.st.maxSt);
+    if (h.instant.food) p.st.food = U.clamp(p.st.food + h.instant.food, 0, p.st.maxFood);
+  }
+  if (h.hp) p.st.hp = U.clamp(p.st.hp + h.hp, 0, p.st.maxHp);
+  if (h.st) p.st.st = U.clamp(p.st.st + h.st, 0, p.st.maxSt);
+  if (h.stopBleed) { p.cb.bleed = 0; p.cb.bleedT = 0; }
+  if (h.cure) cure(p, h.cure);
+  if (h.regen) { p.buffs.regen = h.regenT || 20; p.regenBonus = h.regen; }
+  if (h.buff) p.buffs[h.buff] = Math.max(p.buffs[h.buff] || 0, h.buffT || 180);
+  floater(p.t.x, p.t.y - 0.7, '+' + ((h.instant && h.instant.hp) || h.hp || 0), '#8fe08f');
+}
+function cure(p, what) {
+  if (what === 'poison') { p.cb.poison = 0; p.cb.poisonT = 0; }
+  else if (what === 'burn') { p.cb.burn = 0; p.cb.burnT = 0; }
+  else if (what === 'bleed') { p.cb.bleed = 0; p.cb.bleedT = 0; }
+  else if (what === 'slow') { p.cb.slow = 0; p.cb.slowT = 0; }
+}
+E.useItem = function (p, id) {
+  const def = D.ITEMS[id];
+  if (!def) return { ok: false, msg: 'Objeto desconocido.' };
+  if (def.heal) {
+    if (p.cast) return { ok: false, msg: 'Ya estás aplicando algo.' };
+    const h = def.heal;
+    if (h.instant) {
+      if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+      applyHeal(p, h);
+      A.play('drink'); fx('heal', p.t.x, p.t.y);
+      return { ok: true, msg: def.name + ' usado.' };
+    }
+    if (Inv.count(p, id) < 1) return { ok: false, msg: 'No lo tienes.' };
+    p.cast = { id: id, t: 0, dur: h.cast || 1.2 };
+    A.play('open');
+    return { ok: true, msg: 'Aplicando ' + def.name + '…' };
+  }
+  if (def.food) {
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    const f = def.food;
+    p.st.food = U.clamp(p.st.food + (f.food || 0), 0, p.st.maxFood);
+    if (f.hp) p.st.hp = U.clamp(p.st.hp + f.hp, 0, p.st.maxHp);
+    if (f.st) p.st.st = U.clamp(p.st.st + f.st, 0, p.st.maxSt);
+    if (f.cure) cure(p, f.cure);
+    if (f.buff) p.buffs[f.buff] = Math.max(p.buffs[f.buff] || 0, f.buffT || 180);
+    A.play((f.food || 0) > 0 ? 'eat' : 'drink');
+    fx('heal', p.t.x, p.t.y);
+    floater(p.t.x, p.t.y - 0.6, '+' + (f.food || f.hp || f.st || 0), '#8fe08f');
+    return { ok: true, msg: def.name + ' consumido.' };
+  }
+  if (def.bed) {
+    if (def.bed.portable) { Bus.emit('sleep:request', { mode: 'roll' }); return { ok: true, msg: 'Extendiendo el petate…' }; }
+    const x = Math.floor(p.t.x), y = Math.floor(p.t.y);
+    const chk = W.canPlace(id, x, y, 'player');
+    if (!chk.ok) return { ok: false, msg: chk.reason };
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    const r = W.addBuilding(id, x, y, 'player', {});
+    if (!r.ok) { Inv.add(p, id, 1); return { ok: false, msg: r.reason }; }
+    A.play('build'); fx('dust', x + 0.5, y + 0.5);
+    E.syncGuardians();
+    return { ok: true, msg: def.name + ' colocada.' };
+  }
+  /* Colocables v4: cofres desmontados y otros muebles con def.place */
+  if (def.place) {
+    const key = def.place;
+    if (!D.BUILDINGS[key]) return { ok: false, msg: 'No se puede colocar.' };
+    const x = Math.floor(p.t.x), y = Math.floor(p.t.y);
+    let spot = null;
+    for (let r = 0; r < 3 && !spot; r++) {
+      for (let a = 0; a < 8 && !spot; a++) {
+        const ang = a / 8 * U.TAU;
+        const tx = Math.round(x + cos(ang) * r), ty = Math.round(y + sin(ang) * r);
+        if (W.canPlace(key, tx, ty, 'player').ok) spot = { x: tx, y: ty };
+      }
+    }
+    if (!spot) return { ok: false, msg: 'No hay hueco libre en tu parcela.' };
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    const r2 = W.addBuilding(key, spot.x, spot.y, 'player', {});
+    if (!r2.ok) { Inv.add(p, id, 1); return { ok: false, msg: r2.reason }; }
+    A.play('build'); fx('dust', spot.x + 0.5, spot.y + 0.5);
+    Bus.emit('built', { key: key, building: r2.building });
+    return { ok: true, msg: def.name + ' colocado.' };
+  }
+  if (def.saddle) {
+    const near = E.nearestTamedMountable(p, def.saddle.for);
+    if (!near) return { ok: false, msg: 'Acércate a un ' + (D.SPECIES[def.saddle.for] ? D.SPECIES[def.saddle.for].name.toLowerCase() : 'animal') + ' adulto tameado.' };
+    const sd = D.SPECIES[def.saddle.for];
+    if (sd && sd.mount && sd.mount.req && !D.meetsReq(sd.mount.req, p.lvl.level, p.lvl.alloc))
+      return { ok: false, msg: 'Requiere ' + D.reqText(sd.mount.req) + '.' };
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    near.tg.mountable = true; near.tg.saddle = def.saddle.for;
+    near.st.maxSt = (sd && sd.mount) ? sd.mount.stam : 120; near.st.st = near.st.maxSt;
+    A.play('mount'); fx('spark', near.t.x, near.t.y);
+    return { ok: true, msg: '¡' + near.name + ' ya puede montarse!' };
+  }
+  if (def.pet) {
+    const near = E.nearestCompanion(p);
+    if (!near) return { ok: false, msg: 'Acércate a tu compañero o montura.' };
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    near.tg.petArmor = def.pet.def;
+    A.play('craft');
+    return { ok: true, msg: near.name + ' protegido con barda (+' + def.pet.def + ' def).' };
+  }
+  if (def.animal) {
+    const sp = def.animal.species, sd = D.SPECIES[sp];
+    if (!sd) return { ok: false, msg: 'Especie desconocida.' };
+    if (sd.livestock) {
+      const pen = E.findPenSpace(p, sp);
+      if (!pen) return { ok: false, msg: 'Necesitas un alojamiento con espacio (gallinero, corral o granero).' };
+      if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+      E.spawnCreature(sp, pen.x, pen.y, { persist: true, tamed: true, owner: 'player', livestock: true, home: pen });
+      A.play('buy');
+      return { ok: true, msg: sd.name + ' alojado.' };
+    }
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    const spot = E.freeSpotNear(p.t.x, p.t.y, 2);
+    E.spawnCreature(sp, spot.x, spot.y, { persist: true, tamed: true, owner: 'player' });
+    A.play('buy');
+    return { ok: true, msg: sd.name + ' invocado. Necesita silla para montarlo.' };
+  }
+  if (id === 'repair_kit') {
+    let did = false;
+    ['weapon', 'tool', 'shield'].forEach(function (k) {
+      const s = p.equip[k]; if (!s || s.dur === undefined) return;
+      const dd = D.ITEMS[s.id]; if (!dd) return;
+      const max = maxDurOf(dd);
+      if (s.dur < max) { s.dur = Math.min(max, s.dur + Math.round(max * 0.4)); did = true; }
+    });
+    if (!did) return { ok: false, msg: 'Tu equipo está como nuevo.' };
+    Inv.remove(p, id, 1); A.play('craft');
+    E.recalc(p);
+    return { ok: true, msg: 'Equipo reparado un 40 %.' };
+  }
+  if (id === 'whetstone') {
+    if (!Inv.remove(p, id, 1)) return { ok: false, msg: 'No lo tienes.' };
+    p.buffs.sharp = 600;
+    A.play('craft');
+    return { ok: true, msg: 'Filo afilado: +15 % de daño un rato.' };
+  }
+  if (id === 'fishing_net') { Bus.emit('net:request', {}); return { ok: true, msg: 'Lanzando la red…' }; }
+  if (id === 'dart_narcotic' || id === 'dart_poison') { E.throwDart(p, id); return { ok: true, msg: 'Dardo lanzado.' }; }
+  if (def.ammo || def.bag || def.tool || def.weapon || def.shield || def.armor || def.acc) {
+    const i = Inv.findUsable(p, id);
+    if (i >= 0) return E.equipFromSlot(p, i);
+    const j = Inv.find(p, id);
+    if (j >= 0 && isBroken(p.inv[j])) return { ok: false, msg: def.name + ' está ROTA. Repárala desde el inventario.' };
+    return { ok: false, msg: 'No lo tienes.' };
+  }
+  if (def.seed || def.fert || def.feed) return { ok: false, msg: 'Úsalo sobre el terreno o el animal con Interactuar.', hint: true };
+  return { ok: false, msg: 'No se puede usar así.' };
+};
+
+/* ==========================================================
+17 · INTERACCIÓN CONTEXTUAL
 ========================================================== */
 E.findInteract = function () {
   const p = E.player;
@@ -1941,9 +2125,8 @@ E.findInteract = function () {
     else if (e.tg.tamed && e.tg.mountable && !e.tg.mounted) { bestScore = score; best = { kind: 'mount', target: e, label: 'Montar ' + e.name }; }
     else if (e.tg.tamed) { bestScore = score; best = { kind: 'pet', target: e, label: 'Acariciar a ' + e.name }; }
     else if (e.species && D.SPECIES[e.species] && D.SPECIES[e.species].tame) {
-      const sd = D.SPECIES[e.species];
       const info = E.tameInfo(p, e);
-      if (info.can) { bestScore = score; best = { kind: 'tame', target: e, label: info.label }; }
+      if (info && info.can) { bestScore = score; best = { kind: 'tame', target: e, label: info.label }; }
     }
   }
   if (best) return best;
@@ -2030,7 +2213,7 @@ function interactLivestock(e) {
 }
 
 /* ==========================================================
-17 · TAMEO (comida / sedación / vínculo)
+18 · TAMEO (comida / sedación / vínculo)
 ========================================================== */
 E.tameInfo = function (p, e) {
   const sd = D.SPECIES[e.species];
@@ -2135,7 +2318,7 @@ E.nearestCompanion = function (p) {
 };
 
 /* ==========================================================
-18 · PROYECTILES Y HAZARDS
+19 · PROYECTILES Y HAZARDS
 ========================================================== */
 function spawnProjectile(owner, tx, ty, speed, dmg, type, opts) {
   const pr = projPool.acquire();
@@ -2169,6 +2352,7 @@ function projectileTargets(pr, t) {
   return true;
 }
 function updateProjectiles(dt) {
+  const p = E.player;
   for (let i = E.projectiles.length - 1; i >= 0; i--) {
     const pr = E.projectiles[i];
     pr.px = pr.x; pr.py = pr.y;
@@ -2177,6 +2361,18 @@ function updateProjectiles(dt) {
     let dead = false;
     const solid = W.isSolid(Math.floor(pr.x), Math.floor(pr.y));
     if (solid && pr.type !== 'fire' && pr.type !== 'wisp') dead = true;
+    /* Guardia 8: bloqueando, devuelves el proyectil */
+    if (!dead && pr.hostile && p && !p.ko && p.blk && p.blk.on && E.unlocked(p, 'guard', 8)) {
+      if (U.dist2(pr.x, pr.y, p.t.x, p.t.y) < 0.9) {
+        pr.hostile = false; pr.owner = p;
+        pr.vx = -pr.vx * 1.2; pr.vy = -pr.vy * 1.2;
+        pr.dmg = p.cb.dmg * 0.6;
+        pr.hitIds.length = 0;
+        p.parryFlash = 0.3;
+        A.play('parry');
+        continue;
+      }
+    }
     if (!dead) {
       W.Hash.query(pr.x, pr.y, pr.r + 0.7, E._q1);
       for (let k = 0; k < E._q1.length; k++) {
@@ -2205,17 +2401,16 @@ function updateProjectiles(dt) {
         }
         pr.hitIds.push(t.id);
         if (pr.pierce > 0) { pr.pierce--; pr.dmg *= 0.75; }
-        else { dead = true; }
+        else dead = true;
         break;
       }
     }
     if (pr.type === 'fire' && rngFx().chance(dt * 22)) fx('fire', pr.x, pr.y);
     if (pr.type === 'wisp' && rngFx().chance(dt * 14)) fx('spark', pr.x, pr.y);
-    if (pr.type === 'arrow' && rngFx().chance(dt * 8)) fx('spark', pr.x, pr.y);
     if (dead || pr.life <= 0 || !W.inBounds(Math.floor(pr.x), Math.floor(pr.y))) {
       if (pr.type === 'fire') fx('fire', pr.x, pr.y);
       else if (pr.type === 'venom') fx('poison', pr.x, pr.y);
-      else if (pr.type !== 'arrow' && pr.type !== 'dart') fx('stone', pr.x, pr.y);
+      else if (pr.type !== 'arrow' && pr.type !== 'bolt' && pr.type !== 'dart') fx('stone', pr.x, pr.y);
       E.projectiles.splice(i, 1);
       projPool.release(pr);
     }
@@ -2239,12 +2434,11 @@ function updateHazards(dt) {
     }
   }
 }
+
 /* ==========================================================
-19 · IA ECOLÓGICA
-   · Dieta y facción deciden a quién se ataca y de quién se huye.
-   · Los carnívoros cazan herbívoros; las presas huyen.
-   · Cada especie respeta el radio de su santuario.
-   · Los golpes van en RÁFAGAS con telegrafía y DESCANSO.
+20 · IA ECOLÓGICA
+   Dieta y facción deciden a quién se ataca y de quién se huye.
+   Golpes en RÁFAGAS con telegrafía y DESCANSO. Jefes por fases.
 ========================================================== */
 function dropCombat(e) {
   e.ai.mv = null; e.ai.mvPhase = ''; e.ai.mvT = 0;
@@ -2253,16 +2447,14 @@ function dropCombat(e) {
 function hostileTo(e, t) {
   if (!t || t.tg.dead || t === e) return false;
   if (t.type === 'player' && t.ko) return false;
-  /* Compañeros y trabajadores del jugador */
   if (e.tg.tamed || e.type === 'worker') {
     if (t.type === 'creature' && !t.tg.tamed &&
-        (t.tg.hostile || t.tg.faction === 'predator' || t.tg.faction === 'undead' ||
-         t.tg.faction === 'bandit' || t.tg.faction === 'mythic')) return true;
+      (t.tg.hostile || t.tg.faction === 'predator' || t.tg.faction === 'undead' ||
+       t.tg.faction === 'bandit' || t.tg.faction === 'mythic')) return true;
     if (t.type === 'guard' && t.tg.angry) return true;
     if (t.species === 'bandit') return true;
     return false;
   }
-  /* Guardia de la ciudad */
   if (e.type === 'guard' || e.tg.guardian === 'city') {
     if (t.type === 'player') return E.heat >= 40 || e.tg.angry;
     if (t.species === 'bandit') return true;
@@ -2270,13 +2462,11 @@ function hostileTo(e, t) {
       return W.isCity(Math.floor(t.t.x), Math.floor(t.t.y)) && (t.tg.hostile || t.tg.faction === 'predator');
     return false;
   }
-  /* Guardián de tus construcciones */
   if (e.tg.guardian === 'player') {
     if (t.species === 'bandit') return true;
     return t.type === 'creature' && !t.tg.tamed &&
-           (t.tg.hostile || t.tg.faction === 'predator' || t.tg.faction === 'undead' || t.tg.faction === 'mythic');
+      (t.tg.hostile || t.tg.faction === 'predator' || t.tg.faction === 'undead' || t.tg.faction === 'mythic');
   }
-  /* Guardián de santuario: expulsa a quien entra */
   if (e.tg.guardian === 'zone') {
     if (t.type === 'player' || t.type === 'worker') return true;
     if (t.tg.tamed && t.tg.owner === 'player') return true;
@@ -2285,11 +2475,11 @@ function hostileTo(e, t) {
   }
   if (e.species === 'bandit')
     return t.type === 'player' || t.type === 'worker' || t.type === 'guard' ||
-           (t.tg.tamed && t.type === 'creature');
+      (t.tg.tamed && t.type === 'creature');
   if (e.tg.hostile || e.tg.faction === 'undead' || e.tg.faction === 'mythic')
     return t.type === 'player' || t.type === 'worker' ||
-           (t.tg.tamed && t.type === 'creature') ||
-           (t.type === 'guard' && W.isCity(Math.floor(e.t.x), Math.floor(e.t.y)));
+      (t.tg.tamed && t.type === 'creature') ||
+      (t.type === 'guard' && W.isCity(Math.floor(e.t.x), Math.floor(e.t.y)));
   return false;
 }
 function findEnemy(e, radius) {
@@ -2304,7 +2494,6 @@ function findEnemy(e, radius) {
   }
   return best;
 }
-/** Presa ecológica: solo salvajes, nunca el ganado del jugador. */
 function findPrey(e, radius) {
   W.Hash.query(e.t.x, e.t.y, radius, E._q2);
   let best = null, bd = radius * radius;
@@ -2320,7 +2509,6 @@ function findPrey(e, radius) {
   }
   return best;
 }
-/** Depredador del que esta criatura debe huir. */
 function findThreat(e, radius) {
   W.Hash.query(e.t.x, e.t.y, radius, E._q2);
   let best = null, bd = radius * radius;
@@ -2334,7 +2522,6 @@ function findThreat(e, radius) {
   }
   return best;
 }
-/** Patrón activo: los jefes cambian de patrón por fase de vida. */
 function activePattern(e) {
   const sd = D.SPECIES[e.species];
   if (!sd) return null;
@@ -2357,7 +2544,6 @@ function think(e) {
     return;
   }
   if (e.tg.mounted) { e.ai.state = 'ridden'; dropCombat(e); return; }
-  /* Guardianes de ciudad y de tus construcciones */
   if (e.tg.guardian === 'player' || e.tg.guardian === 'city') {
     if (sd && sd.nocturnal && CR.Time && CR.Time.night < 0.4) {
       e.ai.state = 'perch'; e.ai.perch = true; e.ai.target = null; dropCombat(e); return;
@@ -2394,7 +2580,6 @@ function think(e) {
     e.ai.state = e.ai.threat ? 'flee' : 'wander';
     return;
   }
-  /* Guardianes de santuario */
   if (e.tg.guardian === 'zone') {
     const foe = findEnemy(e, e.ai.leash);
     if (!foe) dropCombat(e);
@@ -2406,11 +2591,9 @@ function think(e) {
   /* 1 · Huir de depredadores */
   if (sd && (sd.diet === 'herbivore' || sd.diet === 'insectivore' || sd.faction === 'prey')) {
     const th = findThreat(e, B.AI_FLEE_RADIUS);
-    if (th) {
-      e.ai.state = 'flee'; e.ai.threat = th; e.ai.target = null; dropCombat(e); return;
-    }
+    if (th) { e.ai.state = 'flee'; e.ai.threat = th; e.ai.target = null; dropCombat(e); return; }
   }
-  /* 2 · Detectar al jugador (la sigilo y la noche modifican el alcance) */
+  /* 2 · Detectar al jugador (sigilo y noche modifican el alcance) */
   const stealth = p ? (p.stealth || 0) : 0;
   let aggro = (sd ? sd.aggro : 4) * (1 - stealth);
   if (sd && sd.nocturnal && CR.Time && CR.Time.night > 0.5) aggro *= 1.25;
@@ -2426,7 +2609,7 @@ function think(e) {
       return;
     }
   }
-  /* 3 · Cazar presas (los carnívoros trabajan aunque no te vean) */
+  /* 3 · Cazar presas */
   if (sd && (sd.diet === 'carnivore' || sd.diet === 'omnivore')) {
     if (!e.ai.prey || e.ai.prey.tg.dead || e.ai.prey.tg.tamed) e.ai.prey = null;
     if (!e.ai.prey && e.ai.rest <= 0.4) e.ai.prey = findPrey(e, B.AI_HUNT_RADIUS);
@@ -2435,7 +2618,7 @@ function think(e) {
   if (beh === 'skittish' && distP < aggro * aggro) {
     e.ai.state = 'flee'; e.ai.threat = p; e.ai.target = null; dropCombat(e); return;
   }
-  /* 4 · Territorio: nunca abandona su santuario o su hogar */
+  /* 4 · Territorio */
   const homeD2 = U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y);
   if (homeD2 > e.ai.leash * e.ai.leash) {
     e.ai.state = 'return'; e.ai.target = null; e.ai.prey = null; dropCombat(e); return;
@@ -2456,9 +2639,7 @@ function thinkNpc(e) {
 }
 function thinkWorker(e) {
   const role = e.tg.role;
-  if (e.tg.child && (e.tg.stage === 'baby' || e.tg.stage === 'child')) {
-    e.ai.state = 'wander'; e.ai.leash = 7; return;
-  }
+  if (e.tg.child && (e.tg.stage === 'baby' || e.tg.stage === 'child')) { e.ai.state = 'wander'; e.ai.leash = 7; return; }
   if (role === 'follow') {
     const foe = findEnemy(e, 10);
     if (!foe) dropCombat(e);
@@ -2472,7 +2653,6 @@ function thinkWorker(e) {
   if (role === 'farm' || role === 'water' || role === 'tend' || role === 'haul') { e.ai.state = 'work'; return; }
   e.ai.state = 'wander';
 }
-
 /* ---------- Golpes: telegrafía → activo → recuperación → descanso ---------- */
 function startMove(e, mv, target) {
   e.ai.mv = mv; e.ai.mvT = 0; e.ai.mvPhase = 'wind';
@@ -2540,8 +2720,7 @@ function execMove(e, mv, target) {
       for (let i = 0; i < mv.ring; i++) {
         const a = (i / mv.ring) * U.TAU;
         spawnProjectile(e, e.t.x + cos(a) * 9, e.t.y + sin(a) * 9, 6, dmg * 0.55,
-          mv.burn ? 'fire' : 'rock',
-          { hostile: true, effect: mv.burn ? 'burn' : null, ang: a, r: 0.36, life: 2 });
+          mv.burn ? 'fire' : 'rock', { hostile: true, effect: mv.burn ? 'burn' : null, ang: a, r: 0.36, life: 2 });
       }
     }
   } else if (kind === 'spit') {
@@ -2557,9 +2736,9 @@ function execMove(e, mv, target) {
     sfxAt('swing', e.t.x, e.t.y);
   } else if (kind === 'pool') {
     if (!target) return;
-    const cnt = mv.count || 3, rng = rngAI();
+    const cnt = mv.count || 3, rg = rngAI();
     for (let i = 0; i < cnt; i++) {
-      const a = rng.next() * U.TAU, d = rng.range(0.4, mv.range || 3);
+      const a = rg.next() * U.TAU, d = rg.range(0.4, mv.range || 3);
       E.hazards.push({
         x: target.t.x + cos(a) * d, y: target.t.y + sin(a) * d, r: mv.r || 1.6,
         type: mv.hazard || 'poison', life: mv.life || 8, dps: Math.max(2, dmg * 0.35),
@@ -2626,7 +2805,6 @@ function execMove(e, mv, target) {
     sfxAt('roar', e.t.x, e.t.y);
   }
 }
-/** Devuelve true si la criatura está ocupada (telegrafía, golpe o descanso). */
 function updateCombat(e, dt, target) {
   const pat = activePattern(e);
   if (!pat || !pat.moves || !pat.moves.length) return false;
@@ -2647,13 +2825,12 @@ function updateCombat(e, dt, target) {
     if (e.ai.mvT >= mv.recover) {
       e.ai.mv = null; e.ai.mvPhase = '';
       e.ai.burst++;
-      const rng = rngAI();
-      const bmax = pat.burst ? rng.int(pat.burst[0], pat.burst[1]) : 1;
+      const rg = rngAI();
+      const bmax = pat.burst ? rg.int(pat.burst[0], pat.burst[1]) : 1;
       if (pat.relentless) e.ai.rest = 0.12;
       else if (e.ai.burst >= bmax) {
         e.ai.burst = 0;
-        e.ai.rest = pat.rest ? rng.range(pat.rest[0], pat.rest[1])
-                             : rng.range(B.AI_REST_MIN, B.AI_REST_MAX);
+        e.ai.rest = pat.rest ? rg.range(pat.rest[0], pat.rest[1]) : rg.range(B.AI_REST_MIN, B.AI_REST_MAX);
       } else e.ai.rest = 0.08;
     }
     return true;
@@ -2662,7 +2839,6 @@ function updateCombat(e, dt, target) {
   if (!target) return false;
   const d2 = U.dist2(e.t.x, e.t.y, target.t.x, target.t.y);
   let pick = null;
-  /* Primero un golpe que ya alcance; si no, uno de largo alcance o embestida */
   for (let i = 0; i < pat.moves.length; i++) {
     const mv = pat.moves[i];
     if (mv.kind === 'summon' || mv.kind === 'heal' || mv.kind === 'buff') continue;
@@ -2673,13 +2849,12 @@ function updateCombat(e, dt, target) {
     for (let i = 0; i < pat.moves.length; i++) {
       const mv = pat.moves[i];
       if (mv.kind !== 'spit' && mv.kind !== 'gaze' && mv.kind !== 'pool' &&
-          mv.kind !== 'dash' && mv.kind !== 'fly_dive') continue;
+        mv.kind !== 'dash' && mv.kind !== 'fly_dive') continue;
       const r = mv.range || 4;
       if (d2 <= r * r) { pick = mv; break; }
     }
   }
   if (!pick) {
-    /* Utilidades del jefe: invocar, curarse o rugir si están disponibles */
     for (let i = 0; i < pat.moves.length; i++) {
       const mv = pat.moves[i];
       if (mv.kind === 'summon' && e.ai.summonCd <= 0 && d2 < 144) { pick = mv; break; }
@@ -2691,8 +2866,6 @@ function updateCombat(e, dt, target) {
   startMove(e, pick, target);
   return true;
 }
-
-/* ---------- Timers diferidos seguros (sin setTimeout del navegador) ---------- */
 const _timers = [];
 function setTimeoutSafe(e, delay, fn) { _timers.push({ t: delay, fn: fn, e: e }); }
 function tickTimers(dt) {
@@ -2706,8 +2879,6 @@ function tickTimers(dt) {
     }
   }
 }
-
-/* ---------- Actualización por entidad ---------- */
 function updateCreature(e, dt) {
   const sd = e.species ? D.SPECIES[e.species] : null;
   const p = E.player;
@@ -2723,7 +2894,7 @@ function updateCreature(e, dt) {
   let speed = (sd ? sd.speed : 3) * (e.tg.baby ? 0.85 : 1) * (e.tg.tamed ? 1.08 : 1);
   if (e.cb.slow > 0) speed *= (1 - e.cb.slow);
   if (e.cb.stagger > 0) speed *= 0.2;
-  /* Sedado: inmóvil e inofensivo; si despierta sin domar, pierde la confianza */
+  /* Sedado: inmóvil e inofensivo */
   if (e.tg.sedated > 0) {
     e.tg.sedated -= dt;
     e.ai.state = 'idle'; e.ai.target = null; dropCombat(e);
@@ -2734,14 +2905,13 @@ function updateCreature(e, dt) {
     }
     return;
   }
-  /* Vínculo: se gana quieto y cerca, se pierde al atacar o correr */
+  /* Vínculo: se gana quieto y cerca */
   if (sd && sd.tame && sd.tame.method === 'bond' && !e.tg.tamed && p) {
     const d2 = U.dist2(e.t.x, e.t.y, p.t.x, p.t.y);
     const still = U.len(p.vx || 0, p.vy || 0) < 1.2;
     if (d2 < 9 && still && !p.act) e.ai.calm = Math.min(6, (e.ai.calm || 0) + dt);
     else e.ai.calm = Math.max(0, (e.ai.calm || 0) - dt * 1.5);
   }
-  /* Empuje residual (embestidas, knockback) */
   if (Math.abs(e.v.x) > 0.02 || Math.abs(e.v.y) > 0.02) {
     move(e, e.v.x * dt, e.v.y * dt, e.tg.flying);
     const decay = Math.pow(0.0006, dt);
@@ -2770,7 +2940,6 @@ function updateCreature(e, dt) {
     const busy = updateCombat(e, dt, t);
     const d2 = U.dist2(e.t.x, e.t.y, t.t.x, t.t.y);
     const reach = (sd ? sd.reach : 1) + 0.4;
-    /* En telegrafía se queda quieto: el jugador ve venir el golpe */
     if (e.ai.mv && e.ai.mvPhase === 'wind') { e.an.walk += dt; return; }
     if (d2 > reach * reach || !busy) {
       const d = Math.sqrt(d2);
@@ -2778,7 +2947,6 @@ function updateCreature(e, dt) {
       if (e.ai.path) followPath(e, speed, dt, e.tg.flying);
       else stepToward(e, t.t.x, t.t.y, speed, dt, e.tg.flying);
     } else e.an.walk += dt * 1.5;
-    /* Abandonar: el jugador se aleja o la criatura sale de su territorio */
     const homeD2 = U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y);
     if (homeD2 > e.ai.leash * e.ai.leash * 1.3) {
       e.ai.state = 'return'; e.ai.target = null; e.ai.prey = null; dropCombat(e);
@@ -2820,35 +2988,35 @@ function updateCreature(e, dt) {
   }
   if (st === 'work') { updateWork(e, dt, speed); return; }
   if (st === 'idle') { e.an.walk += dt * 0.3; return; }
-  /* Deambular */
+  /* Deambular con rutinas de NPC */
   e.ai.wanderT -= dt;
   if (e.ai.wanderT <= 0) {
-    const rng = rngAI();
-    e.ai.wanderT = 1.6 + rng.next() * 3.2;
+    const rg = rngAI();
+    e.ai.wanderT = 1.6 + rg.next() * 3.2;
     if (e.type === 'npc') {
       const nd = D.NPCS[e.npcId];
       const hr = CR.Time ? CR.Time.hour : 12;
       if (nd && nd.post) {
         e.ai.atPost = true;
-        const a0 = rng.next() * U.TAU, d0 = rng.next() * 0.6;
+        const a0 = rg.next() * U.TAU, d0 = rg.next() * 0.6;
         e.ai.wx = e.ai.home.x + cos(a0) * d0; e.ai.wy = e.ai.home.y + sin(a0) * d0;
-        e.ai.wanderT = 1.2 + rng.next() * 2;
+        e.ai.wanderT = 1.2 + rg.next() * 2;
       } else {
         const shopHours = hr >= 7 && hr < 19, rest = hr >= 22 || hr < 6;
         e.ai.atPost = shopHours || rest;
         let ok = false;
         for (let tries = 0; tries < 8 && !ok; tries++) {
           const r = (nd && nd.farmer) ? 9 : 12;
-          const a1 = rng.next() * U.TAU, d1 = rng.next() * r;
+          const a1 = rg.next() * U.TAU, d1 = rg.next() * r;
           const tx = e.ai.home.x + cos(a1) * d1, ty = e.ai.home.y + sin(a1) * d1;
           if (W.walkable(Math.floor(tx), Math.floor(ty), false)) { e.ai.wx = tx; e.ai.wy = ty; ok = true; }
         }
         if (!ok) { e.ai.wx = e.ai.home.x; e.ai.wy = e.ai.home.y; }
-        e.ai.wanderT += 2 + rng.next() * 4;
+        e.ai.wanderT += 2 + rg.next() * 4;
       }
     } else {
       const r = e.tg.livestock ? 2.2 : Math.min(6, e.ai.leash * 0.5);
-      const a = rng.next() * U.TAU, d = rng.next() * r;
+      const a = rg.next() * U.TAU, d = rg.next() * r;
       const tx = e.ai.home.x + cos(a) * d, ty = e.ai.home.y + sin(a) * d;
       if (W.walkable(Math.floor(tx), Math.floor(ty), e.tg.flying)) { e.ai.wx = tx; e.ai.wy = ty; }
       else { e.ai.wx = e.ai.home.x; e.ai.wy = e.ai.home.y; }
@@ -2857,7 +3025,6 @@ function updateCreature(e, dt) {
   }
   if (e.ai.hasW) stepToward(e, e.ai.wx, e.ai.wy, speed * (e.type === 'npc' ? 0.5 : 0.42), dt, e.tg.flying);
 }
-/* ---------- Trabajadores por rol ---------- */
 function updateWork(e, dt, speed) {
   e.tg.workT -= dt;
   if (e.ai.path) { followPath(e, speed, dt, false); return; }
@@ -2874,17 +3041,11 @@ function updateWork(e, dt, speed) {
       else want = (s.crop && s.growth >= 1) || !s.crop;
       if (!want) return;
       const d = U.dist2(e.t.x, e.t.y, x + 0.5, y + 0.5);
-      if (d < bd && d < 1200) {
-        bd = d;
-        target = { x: x, y: y, water: role === 'water', ready: !!(s.crop && s.growth >= 1) };
-      }
+      if (d < bd && d < 1200) { bd = d; target = { x: x, y: y, water: role === 'water', ready: !!(s.crop && s.growth >= 1) }; }
     });
     if (target) {
       if (bd < 1.8) {
-        Bus.emit('work', {
-          action: target.water ? 'water' : (target.ready ? 'harvest' : 'plant'),
-          worker: e, x: target.x, y: target.y
-        });
+        Bus.emit('work', { action: target.water ? 'water' : (target.ready ? 'harvest' : 'plant'), worker: e, x: target.x, y: target.y });
         e.an.atk = 0.3; e.tg.workT = 1.5;
       } else if (!e.ai.path) requestPath(e, target.x, target.y, false);
     } else {
@@ -2926,17 +3087,17 @@ function updateWork(e, dt, speed) {
 }
 
 /* ==========================================================
-20 · DIRECTOR DE SPAWN (ecología separada y territorial)
+21 · DIRECTOR DE SPAWN (ecología separada y territorial)
 ========================================================== */
 function packSize(sd) {
   if (sd.kind === 'boss' || sd.kind === 'mythic' || sd.elite) return 1;
-  const rng = rngAI();
+  const rg = rngAI();
   if (sd.diet === 'carnivore' || sd.diet === 'omnivore')
-    return rng.int(B.SPAWN_PACK_PRED[0], B.SPAWN_PACK_PRED[1]);
+    return rg.int(B.SPAWN_PACK_PRED[0], B.SPAWN_PACK_PRED[1]);
   if (sd.pack) {
-    /* Manadas pequeñas: los herbívoros ya no salen en grupos enormes */
-    const lo = Math.min(sd.pack[0], B.SPAWN_PACK_HERB[0]), hi = Math.max(lo, Math.min(sd.pack[1], B.SPAWN_PACK_HERB[1]));
-    return rng.int(lo, hi);
+    const lo = Math.min(sd.pack[0], B.SPAWN_PACK_HERB[0]);
+    const hi = Math.max(lo, Math.min(sd.pack[1], B.SPAWN_PACK_HERB[1]));
+    return rg.int(lo, hi);
   }
   return 1;
 }
@@ -2946,7 +3107,6 @@ function director(dt) {
   E._spawnT -= dt;
   if (E._spawnT > 0) return;
   E._spawnT = B.SPAWN_TICK;
-  /* Limpieza y recuento de fauna activa */
   let wild = 0, herb = 0;
   const perSp = Object.create(null);
   for (let i = 0; i < E.list.length; i++) {
@@ -2962,7 +3122,6 @@ function director(dt) {
   }
   const rng = CR.streams ? CR.streams.spawn : rngAI();
   const night = CR.Time ? CR.Time.night > 0.5 : false;
-  /* Fauna común: nunca dentro del buffer de la ciudad ni en santuarios */
   if (wild < E.WILD_CAP && E.list.length < E.CAP - 12) {
     for (let k = 0; k < B.SPAWN_TRIES; k++) {
       const t = W.randomTileNear(p.t.x, p.t.y, B.SPAWN_RING[0], B.SPAWN_RING[1], rng);
@@ -2979,7 +3138,6 @@ function director(dt) {
         if (sd.kind === 'boss' || sd.kind === 'livestock') continue;
         if (sd.biomes && sd.biomes.length && sd.biomes.indexOf(t.biome) < 0) continue;
         if (sd.nocturnal && !night && rng.chance(0.8)) continue;
-        /* Tope por especie y por herbívoros: aparecen lo justo, no en masa */
         if ((perSp[id] || 0) >= B.SPECIES_CAP) continue;
         if (herb >= B.HERB_CAP && (sd.diet === 'herbivore' || sd.diet === 'insectivore' || sd.faction === 'prey')) continue;
         pool.push([id, bd.spawns[i][1]]);
@@ -2988,10 +3146,10 @@ function director(dt) {
       if (!pool.length) continue;
       let roll = rng.next() * total, pick = pool[0][0];
       for (let i = 0; i < pool.length; i++) { roll -= pool[i][1]; if (roll <= 0) { pick = pool[i][0]; break; } }
-      const sd = D.SPECIES[pick];
+      const sd2 = D.SPECIES[pick];
       const tile = W.speciesSpawnTile(pick, p.t.x, p.t.y, rng, E.list);
       if (!tile) continue;
-      const n = packSize(sd);
+      const n = packSize(sd2);
       let made = 0;
       for (let i = 0; i < n; i++) {
         if (E.list.length >= E.CAP - 8) break;
@@ -3007,7 +3165,7 @@ function director(dt) {
       if (made) break;
     }
   }
-  /* Santuarios cercanos: solo su fauna exclusiva, dentro de su radio */
+  /* Santuarios cercanos: solo su fauna exclusiva */
   for (let i = 0; i < W.zones.length; i++) {
     const z = W.zones[i];
     if (U.dist2(p.t.x, p.t.y, z.x, z.y) > 70 * 70) continue;
@@ -3049,7 +3207,7 @@ function director(dt) {
 }
 
 /* ==========================================================
-21 · BUCLE PRINCIPAL DE ENTIDADES
+22 · BUCLE PRINCIPAL DE ENTIDADES
 ========================================================== */
 E.update = function (dt) {
   tickTimers(dt);
@@ -3065,7 +3223,6 @@ E.update = function (dt) {
     const e = E.list[i];
     if (e === p || e.tg.dead) continue;
     const far = p ? U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) : 0;
-    /* LOD de simulación: los lejanos piensan a menor frecuencia */
     if (far > 74 * 74 && !e.tg.boss && !e.tg.persist) {
       if ((e.id & 3) !== (E._frame & 3)) continue;
       updateCreature(e, dt * 4);
@@ -3080,7 +3237,6 @@ E.update = function (dt) {
   W.Hash.rebuild(E.list);
   director(dt);
   E._frame = (E._frame + 1) | 0;
-  /* Barrido diferido de muertos */
   for (let i = E.list.length - 1; i >= 0; i--) {
     const e = E.list[i];
     if (!e.tg.dead || e.type === 'player') continue;
@@ -3092,7 +3248,7 @@ E.update = function (dt) {
 };
 
 /* ==========================================================
-22 · CICLO DIARIO Y REAPARICIÓN
+23 · CICLO DIARIO Y REAPARICIÓN
 ========================================================== */
 E.onDay = function (day) {
   E.day = day;
@@ -3101,7 +3257,6 @@ E.onDay = function (day) {
   for (let i = 0; i < E.list.length; i++) {
     const e = E.list[i];
     if (e.tg.dead) continue;
-    /* Crías salvajes que crecen */
     if (e.tg.baby && !e.tg.child && day >= e.tg.growDay) {
       const sd = D.SPECIES[e.species];
       e.tg.baby = false;
@@ -3113,7 +3268,6 @@ E.onDay = function (day) {
       if (e.tg.tamed) { toast('¡' + e.name + ' ha crecido!', 'good'); fx('spark', e.t.x, e.t.y); }
       Bus.emit('grew', { entity: e });
     }
-    /* Ganado: produce si fue alimentado */
     if (e.tg.livestock && e.tg.owner === 'player') {
       if (e.tg.fed > 0) {
         e.tg.fed--; e.tg.prodT++;
@@ -3128,7 +3282,6 @@ E.onDay = function (day) {
         }
       } else e.tg.prodT = 0;
     }
-    /* Compañeros y guardianes amanecen curados */
     if (e.tg.tamed && !e.tg.livestock) e.st.hp = e.st.maxHp;
     if (e.tg.tamed) { e.cb.poison = 0; e.cb.poisonT = 0; e.cb.burn = 0; e.cb.burnT = 0; e.cb.bleed = 0; e.cb.bleedT = 0; }
   }
@@ -3151,7 +3304,7 @@ E.respawnPlayer = function (x, y) {
   p.cb.stagger = 0; p.cb.guard = 0;
   p.ko = false;
   p.v.x = p.v.y = 0; p.vx = p.vy = 0;
-  p.act = null; p.blk.on = false; p.cast = null;
+  p.act = null; if (p.blk) p.blk.on = false; p.cast = null;
   p.rollT = 0; p.rollCd = 0;
   if (p.mount) E.dismount();
   forgetPlayer();
@@ -3160,7 +3313,7 @@ E.respawnPlayer = function (x, y) {
 };
 
 /* ==========================================================
-23 · SERIALIZACIÓN
+24 · SERIALIZACIÓN v4 (incluye saberes y puntos de receta)
 ========================================================== */
 E.serialize = function () {
   const p = E.player;
@@ -3206,6 +3359,8 @@ E.deserialize = function (data) {
       p.lvl.xp = pd.lvl.xp || 0;
       p.lvl.level = pd.lvl.level || D.levelFromXP(p.lvl.xp);
       p.lvl.points = pd.lvl.points || 0;
+      p.lvl.known = pd.lvl.known || {};
+      p.lvl.rp = pd.lvl.rp || 0;
       for (let i = 0; i < D.SKILLS.length; i++) {
         const id = D.SKILLS[i].id;
         p.lvl.alloc[id] = (pd.lvl.alloc && pd.lvl.alloc[id]) || 0;
@@ -3233,15 +3388,10 @@ E.deserialize = function (data) {
         const s = data.persist[i];
         let e = null;
         if (s.type === 'worker') {
-          e = E.spawnWorker({
-            name: s.name, gender: s.gender, x: s.x, y: s.y,
-            role: s.tg.role, child: s.tg.child, stage: s.tg.stage, growDay: s.tg.growDay
-          });
+          e = E.spawnWorker({ name: s.name, gender: s.gender, x: s.x, y: s.y,
+            role: s.tg.role, child: s.tg.child, stage: s.tg.stage, growDay: s.tg.growDay });
         } else if (s.species) {
-          e = E.spawnCreature(s.species, s.x, s.y, {
-            persist: true, tamed: s.tg.tamed, owner: s.tg.owner,
-            livestock: s.tg.livestock, noBaby: true
-          });
+          e = E.spawnCreature(s.species, s.x, s.y, { persist: true, tamed: s.tg.tamed, owner: s.tg.owner, livestock: s.tg.livestock, noBaby: true });
         }
         if (!e) continue;
         e.name = s.name;
@@ -3285,6 +3435,7 @@ E.reset = function (keepPlayer) {
   W.Hash.clear();
 };
 
-console.info('[CR] entities.js v3 listo · canales de combate · apuntado pegajoso · ' +
-  Object.keys(D.SPECIES).length + ' especies con ecología · ' + D.SKILLS.length + ' ramas de habilidad');
+console.info('[CR] entities.js v4 listo · kit inicial reducido · herramientas rotas reparables · ' +
+  'niveles con stats y saberes · canales de combate · apuntado pegajoso · ' +
+  Object.keys(D.SPECIES).length + ' especies con ecología · jefes por fases');
 })();

@@ -1,9 +1,14 @@
 /* ============================================================
-KANATO DE JOTUN · main.js — Bootstrap v3
-Máquina de estados (título → creación → juego → pausa → KO →
-error), bucle único, capa de compatibilidad, autoguardado,
-auto-pausa por foco, overlay de pánico con exportación y panel
-de rendimiento F3. Cierra la arquitectura de 13 módulos.
+KANATO DE JOTUN · main.js — Bootstrap v4
+Máquina de estados (título → creación → INTRO → juego → pausa →
+KO → error), bucle único, capa de compatibilidad, autoguardado,
+auto-pausa por foco, overlay de pánico con exportación y panel F3.
+
+CAMBIOS v4:
+· INTRO (mejora 5): tras generar el mundo y crear al jugador se
+  muestra screen-intro con la historia; un clic (o Enter) entra.
+· Kit inicial (mejora 6): ya no se regala petate ni se tocan las
+  ranuras rápidas; entities v4 entrega SOLO pico y hacha de piedra.
 ============================================================ */
 (function () {
 'use strict';
@@ -14,19 +19,15 @@ const el = function (id) { return document.getElementById(id); };
 const Game = CR.Game = { state: 'boot', debug: false, _dbgT: 0, _started: false };
 
 /* ==========================================================
-CAPA DE COMPATIBILIDAD · correcciones defensivas idempotentes.
-En v3 el mundo, el render y la pesca ya resuelven la mayor parte
-de los casos; aquí solo quedan seguros de última milla.
+CAPA DE COMPATIBILIDAD · correcciones defensivas idempotentes
 ========================================================== */
 function compat() {
   if (W.__crCompat) return;
   W.__crCompat = true;
-  /* 1 · El token de generación debe sobrevivir al reset interno,
-        o la promesa de generate() no se resolvería. world.js v3 ya
-        lo preserva, pero por si un módulo antiguo lo pisa: */
+  /* 1 · El token de generación sobrevive al reset interno. */
   const origReset = W.reset;
   W.reset = function () { const t = W._genToken; origReset.call(W); W._genToken = t; };
-  /* 2 · Edificios sin funciones no deben romper la interacción. */
+  /* 2 · Edificios sin funciones no rompen la interacción. */
   const origBI = S.buildingInteract;
   if (typeof origBI === 'function') {
     S.buildingInteract = function (b) {
@@ -35,8 +36,7 @@ function compat() {
       catch (e) { CR.reportError(e, 'buildingInteract'); }
     };
   }
-  /* 3 · Al despertar de un KO, limpia cualquier canal de entrada
-        pegado (ataque/bloqueo mantenidos antes de caer). */
+  /* 3 · Al despertar de un KO, limpia canales de entrada pegados. */
   Bus.on('ko:hide', function () { CR.Input.clearAll(); }, 'main-compat');
 }
 
@@ -67,8 +67,6 @@ function placeSlaveCamp() {
 /* ==========================================================
 ESTADOS
 ========================================================== */
-/* Recalcula solo la simulación (no toca el input): lo emite
-   'ui:gate' desde UI.syncInput; volver a llamarla causaría bucle. */
 function syncSimOnly() {
   const p = E.player;
   const busy = !!(S.dialog || S.panel || UI.local || UI._edit || UI._portrait);
@@ -85,6 +83,25 @@ function enterPlaying() {
   CR.Loop.resetClock();
   A.resume();
   syncSim();
+}
+/* --- v4: INTRO (mejora 5) --- */
+function showIntro() {
+  Game.state = 'intro';
+  CR.Loop.simEnabled = false;
+  CR.Input.enabled = false;
+  CR.Input.clearAll();
+  el('hud').hidden = true;
+  UI.showScreen('screen-intro');
+  A.resume();
+}
+function enterFromIntro() {
+  if (Game.state !== 'intro') return;
+  UI.hideScreens();
+  enterPlaying();
+  UI.banner('ESCLAVO DE VHALOR', 'Deuda: 2.000 oro. Pica, tala, vende… y rompe tu cadena.');
+  UI.toast('En la plaza hay HORNO y MESA PÚBLICOS: fabrica sin construir nada (lentos, sin calidad).', 'gold');
+  UI.toast('Si una herramienta se rompe NO la tires: repárala barata desde el inventario (I).', '');
+  UI.toast('Cada nivel da 1 punto de habilidad (H) y 1 punto de receta (J): elige saberes.', '');
 }
 function toTitle() {
   Game.state = 'title';
@@ -132,12 +149,8 @@ function startNew(name, gender, seedStr) {
     if (!ok) { UI.showError('No se pudo generar el mundo. Recarga la página.'); return; }
     UI.setLoad(0.96, 'Poblando Vhalor…');
     S.newGame(name, gender, seed);
+    /* entities v4 ya entrega SOLO pico y hacha de piedra (mejora 6). */
     const p = E.createPlayer(name, gender);
-    /* Carga inicial: herramientas en la barra rápida y un petate
-       para poder dormir desde el primer día. */
-    p.quick[2] = 'axe_stone';
-    p.quick[3] = 'pick_stone';
-    E.Inv.add(p, 'bed_roll', 1);
     E.spawnNPCs();
     placeSlaveCamp();
     E.spawnBosses();
@@ -146,10 +159,7 @@ function startNew(name, gender, seedStr) {
     W.Hash.rebuild(E.list);
     R.invalidateAll();
     UI.setLoad(1, 'Listo.');
-    enterPlaying();
-    UI.banner('⛓ ESCLAVO DE VHALOR', 'Deuda: 2.000 oro. Pica, tala, vende… y rompe tu cadena.');
-    UI.toast('Habla con Bareth para pagar tu deuda. Vende piedra y madera.', 'gold');
-    UI.toast('Con el petate puedes dormir donde estés (hay riesgo de emboscada).', '');
+    showIntro();               /* v4: la historia antes de entrar */
     S.save(true);
   }).catch(function (e) { CR.reportError(e, 'startNew'); });
 }
@@ -166,7 +176,7 @@ function loadGame() {
       return;
     }
     R.invalidateAll();
-    enterPlaying();
+    enterPlaying();            /* sin intro al cargar: ya conoces tu historia */
     UI.banner('PARTIDA RECUPERADA', E.player.name + ' · Día ' + CR.Time.day);
   }).catch(function (e) { CR.reportError(e, 'loadGame'); });
 }
@@ -226,6 +236,15 @@ function bind() {
     startNew(name, gender, (el('create-seed').value || '').trim());
   }, false, 'main');
   B.add(el('create-name'), 'keydown', function (e) { if (e.key === 'Enter') el('btn-create-start').click(); }, false, 'main');
+  /* INTRO (mejora 5): clic o Enter para entrar al mundo */
+  B.add(el('btn-intro-enter'), 'click', function () { A.play('quest'); enterFromIntro(); }, false, 'main');
+  B.add(el('screen-intro'), 'click', function (e) {
+    if (e.target.closest('.btn')) return;
+    A.play('quest'); enterFromIntro();
+  }, false, 'main');
+  B.add(window, 'keydown', function (e) {
+    if (Game.state === 'intro' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); enterFromIntro(); }
+  }, false, 'main');
   /* Pausa */
   B.add(el('btn-resume'), 'click', function () { pause(false); }, false, 'main');
   B.add(el('btn-save'), 'click', function () { S.save(false); }, false, 'main');
@@ -247,6 +266,7 @@ function bind() {
   Bus.on('ui:pause', function () { if (Game.state === 'playing') pause(true); else if (Game.state === 'paused') pause(false); }, 'main');
   Bus.on('ui:escape', function () {
     if (UI._edit) { UI.exitCtlEdit(); syncSim(); return; }
+    if (Game.state === 'intro') { enterFromIntro(); return; }
     if (S.dialog) { S.closeDialog(); syncSim(); return; }
     if (S.panel) { S.closePanel(); syncSim(); return; }
     if (UI.local) { UI.closeModal(); syncSim(); return; }
@@ -317,7 +337,7 @@ function boot() {
       const bc = el('btn-continue');
       if (bc) bc.disabled = !S.hasSave();
     }, 420);
-    console.info('[CR] KANATO DE JOTUN v' + CR.version + ' listo · mundo ' + C.WORLD + '² · 13 módulos · 60 Hz fijos · guardado con backup.');
+    console.info('[CR] KANATO DE JOTUN v' + CR.version + ' listo · mundo ' + C.WORLD + '² · intro + tiers + saberes + talleres públicos · 60 Hz fijos.');
   } catch (e) {
     CR.reportError(e, 'boot');
   }
