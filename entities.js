@@ -39,7 +39,8 @@ function blankAI() {
     home: { x: 0, y: 0 }, path: null, pi: 0, wanderT: 0, wx: 0, wy: 0, hasW: false,
     leash: 12, zone: null, rest: 0, burst: 0, mv: null, mvT: 0, mvPhase: '',
     giveup: 0, routeI: 0, route: null, atPost: true, perch: true, workT: 0,
-    summonCd: 0, healOnce: false, bond: 0, calm: 0 };
+    summonCd: 0, healOnce: false, bond: 0, calm: 0, ease: 0, scaredT: 0, curious: false,
+    tl: null, tn: null };
 }
 function blankTG() {
   return { dead: false, persist: false, baby: false, tamed: false, owner: null,
@@ -49,7 +50,8 @@ function blankTG() {
     role: 'idle', child: false, stage: 'adult', angry: false, respawnDay: 0,
     scale: 1, tint: '#fff', zone: null, faction: 'neutral', diet: 'none',
     guardian: null, wanderer: false, hunter: false, lastProduct: 0, deposit: null,
-    elite: false, flyer: false, fireproof: false, iceproof: false };
+    elite: false, flyer: false, fireproof: false, iceproof: false,
+    order: 'follow', ox: 0, oy: 0, otk: 'player', otid: 0, taskT: 0, alertT: 0 };
 }
 function blank() {
   return {
@@ -73,7 +75,7 @@ function reset(e) {
   ai.wanderT = 0; ai.wx = ai.wy = 0; ai.hasW = false; ai.leash = 12; ai.zone = null;
   ai.rest = 0; ai.burst = 0; ai.mv = null; ai.mvT = 0; ai.mvPhase = ''; ai.giveup = 0;
   ai.routeI = 0; ai.route = null; ai.atPost = true; ai.perch = true; ai.workT = 0;
-  ai.summonCd = 0; ai.healOnce = false; ai.bond = 0; ai.calm = 0;
+  ai.summonCd = 0; ai.healOnce = false; ai.bond = 0; ai.calm = 0; ai.ease = 0; ai.scaredT = 0; ai.curious = false; ai.tl = null; ai.tn = null;
   const tg = e.tg;
   tg.dead = false; tg.persist = false; tg.baby = false; tg.tamed = false; tg.owner = null;
   tg.mountable = false; tg.mounted = false; tg.flying = false; tg.saddle = null; tg.petArmor = 0;
@@ -84,6 +86,7 @@ function reset(e) {
   tg.faction = 'neutral'; tg.diet = 'none'; tg.guardian = null; tg.wanderer = false;
   tg.hunter = false; tg.lastProduct = 0; tg.deposit = null; tg.elite = false;
   tg.flyer = false; tg.fireproof = false; tg.iceproof = false;
+  tg.order = 'follow'; tg.ox = 0; tg.oy = 0; tg.otk = 'player'; tg.otid = 0; tg.taskT = 0; tg.alertT = 0;
   e.an.walk = 0; e.an.hurt = 0; e.an.atk = 0; e.an.bob = 0; e.an.spawn = 0.35;
   e.an.block = 0; e.an.draw = 0; e.an.tele = 0;
   return e;
@@ -1081,7 +1084,7 @@ E.damage = function (target, amount, src, opts) {
   if (target.type === 'npc' && src && src.type === 'player') Bus.emit('npc:attacked', { npcId: target.npcId });
   if (target.type === 'guard' && src && src.type === 'player') { E.heat = Math.min(100, E.heat + 35); target.tg.angry = true; }
   if (target.type !== 'player' && !target.tg.tamed && src && !o.dot) {
-    if (target.tg.faction === 'prey' || target.tg.faction === 'neutral') { target.ai.threat = src; target.ai.state = 'flee'; }
+    if (target.tg.faction === 'prey' || target.tg.faction === 'neutral') { target.ai.threat = src; target.ai.state = 'flee'; target.ai.ease = 0; target.ai.scaredT = 6; }
     else { target.tg.hostile = true; target.ai.target = src; target.ai.state = 'chase'; }
   }
   if (target.st.hp <= 0) kill(target, src);
@@ -2280,6 +2283,7 @@ E.tryTame = function (e) {
   e.tg.tameProgress = (e.tg.tameProgress || 0) + 1;
   e.an.bob = 0.5;
   e.ai.state = 'idle'; e.ai.target = null; e.tg.hostile = false;
+  e.ai.ease = 1; e.ai.scaredT = 0;
   A.playAt('eat', e.t.x, e.t.y, p.t.x, p.t.y);
   fx('heart', e.t.x, e.t.y);
   if (e.tg.tameProgress >= info.need) {
@@ -2509,6 +2513,58 @@ function findPrey(e, radius) {
   }
   return best;
 }
+/* ---------- Confianza de presas domables por comida ----------
+   Al principio SIEMPRE huyen. Solo confían si llevas en la mochila algo
+   de su comida: entonces ganan confianza si estás quieto (rápido) o te
+   acercas muy despacio (lento); caminando normal casi no suben. Con plena
+   confianza se quedan mirándote y, si sigues quieto, se acercan solos.
+   Sin su comida, o si corres, rodas o atacas, huyen como siempre. */
+function feedTameable(sd, e) { return !!(sd && sd.tame && sd.tame.method === 'feed' && !e.tg.tamed); }
+function playerHasFoodFor(p, sd) {
+  const f = sd.tame.foods;
+  for (let i = 0; i < f.length; i++) if (Inv.count(p, f[i]) > 0) return true;
+  return false;
+}
+function updateEase(e, sd, p, dt) {
+  const ai = e.ai;
+  if (ai.scaredT > 0) ai.scaredT = Math.max(0, ai.scaredT - dt);
+  if (p.ko) { ai.ease = Math.max(0, (ai.ease || 0) - dt * 0.3); ai.curious = false; return; }
+  const d2 = U.dist2(e.t.x, e.t.y, p.t.x, p.t.y);
+  const range = (B.TAME_EASE_RANGE || 11);
+  if (d2 > range * range) { ai.ease = Math.max(0, (ai.ease || 0) - dt * 0.15); ai.curious = false; return; }
+  /* Sin su comida no hay confianza posible */
+  if (!playerHasFoodFor(p, sd)) { ai.ease = Math.max(0, (ai.ease || 0) - dt * 0.5); ai.curious = false; return; }
+  const mo = p.mount;
+  const sp = mo ? U.len(mo.vx || 0, mo.vy || 0) : U.len(p.vx || 0, p.vy || 0);
+  const walk = B.SPEED * (p.speedMul || 1);
+  const hostileAct = p.act && (p.act.kind === 'melee' || p.act.kind === 'bash' || p.act.kind === 'draw' || p.act.kind === 'charge');
+  const loud = p.rollT > 0 || hostileAct || sp > walk * 1.08;
+  if (loud) {
+    if (d2 < (sd.aggro || 5) * (sd.aggro || 5) * 1.6) { ai.ease = 0; ai.scaredT = Math.max(ai.scaredT, 1.4); ai.curious = false; }
+    return;
+  }
+  const still = sp < 0.4;
+  const gain = still ? 0.5 : (sp < walk * 0.62 ? 0.3 : 0.05);
+  const before = ai.ease || 0;
+  ai.ease = Math.min(1, before + gain * dt);
+  ai.curious = ai.ease >= 0.75 && still && !mo;
+  if (before < 0.7 && ai.ease >= 0.7 && d2 < 64) fx('heart', e.t.x, e.t.y);
+}
+/** ¿Debe huir de ti? El radio de susto se encoge con la confianza. */
+function playerSpooks(e, sd, p, d2, baseR) {
+  if (!p || p.ko) return false;
+  if (!feedTameable(sd, e) || e.ai.scaredT > 0) return d2 < baseR * baseR;
+  const r = Math.max(B.TAME_MIN_SPOOK || 0.9, baseR * (1 - 0.88 * (e.ai.ease || 0)));
+  return d2 < r * r;
+}
+/** Si ya confía, se queda quieto mirándote (y se acerca si llevas su comida). */
+function calmHold(e, sd, p, d2) {
+  if (!feedTameable(sd, e) || !p || p.ko) return false;
+  const ai = e.ai;
+  if ((ai.ease || 0) < 0.4 || d2 > 81) { ai.curious = false; return false; }
+  ai.state = 'idle'; ai.target = null; ai.threat = null;
+  return true;
+}
 function findThreat(e, radius) {
   W.Hash.query(e.t.x, e.t.y, radius, E._q2);
   let best = null, bd = radius * radius;
@@ -2530,6 +2586,325 @@ function activePattern(e) {
     if (ph) return ph;
   }
   return sd.pattern || null;
+}
+/* ==========================================================
+20b · ÓRDENES A COMPAÑEROS
+   Seguir · Quedarse · Ir a un punto · Atacar un objetivo · Tareas de
+   apoyo para herbívoros que no atacan (recoger botín, forrajear,
+   vigía y abonar) · Liberar.
+========================================================== */
+const PET_TASKS = ['haul', 'forage', 'watch', 'manure'];
+E.PET_TASKS = PET_TASKS;
+E.PET_ORDER_NAMES = { follow: 'Te sigue', stay: 'Quieto', goto: 'Yendo al punto', attack: 'Atacando',
+  haul: 'Recogiendo botín', forage: 'Forrajeando', watch: 'De vigía', manure: 'Abonando' };
+E.isCompanion = function (e) {
+  return !!e && !e.tg.dead && e.type === 'creature' && e.tg.tamed && e.tg.owner === 'player' && !e.tg.livestock && !e.tg.guardian;
+};
+E.isSupport = function (e) {
+  const sd = e && e.species ? D.SPECIES[e.species] : null;
+  if (!sd) return false;
+  return sd.dmg <= 0 || sd.diet === 'herbivore' || sd.diet === 'insectivore';
+};
+E.canAttackOrder = function (e) {
+  const sd = e && e.species ? D.SPECIES[e.species] : null;
+  return !!sd && sd.dmg > 0;
+};
+E.companionList = function () {
+  const out = [];
+  for (let i = 0; i < E.list.length; i++) if (E.isCompanion(E.list[i])) out.push(E.list[i]);
+  return out;
+};
+function leashOf(sd) { return (sd && sd.leash) || (sd && sd.kind === 'mythic' ? B.AI_LEASH_MYTH : B.AI_LEASH); }
+E.setOrder = function (e, order, tgt) {
+  const p = E.player;
+  if (!p || !E.isCompanion(e)) return { ok: false, msg: '' };
+  const sd = D.SPECIES[e.species], tg = e.tg;
+  if (tg.mounted) return { ok: false, msg: e.name + ' está montado.' };
+  if (order === 'attack' && !E.canAttackOrder(e)) return { ok: false, msg: e.name + ' no ataca.' };
+  if (PET_TASKS.indexOf(order) >= 0 && !E.isSupport(e)) return { ok: false, msg: e.name + ' no hace tareas de apoyo.' };
+  tg.order = order; tg.otk = 'player'; tg.otid = 0; tg.taskT = 0; tg.alertT = 0;
+  e.ai.path = null; e.ai.target = null; e.ai.prey = null; e.ai.tl = null; e.ai.tn = null;
+  dropCombat(e);
+  e.ai.leash = leashOf(sd);
+  e.an.bob = 0.4;
+  A.playAt('tame', e.t.x, e.t.y, p.t.x, p.t.y);
+  if (order === 'follow') {
+    e.ai.state = 'follow';
+    return { ok: true, msg: e.name + ' te sigue.' };
+  }
+  if (order === 'stay') {
+    tg.ox = e.t.x; tg.oy = e.t.y;
+    e.ai.home.x = tg.ox; e.ai.home.y = tg.oy; e.ai.leash = 7; e.ai.state = 'hold';
+    return { ok: true, msg: e.name + ' se queda quieto.' };
+  }
+  if (order === 'goto') {
+    const pt = tgt || { x: p.t.x, y: p.t.y };
+    tg.ox = pt.x; tg.oy = pt.y; tg.otk = 'point'; e.ai.state = 'petgo';
+    return { ok: true, msg: e.name + ' va al punto marcado.' };
+  }
+  if (order === 'attack') {
+    const t = tgt && tgt.ent;
+    if (!t || t.tg.dead) { tg.order = 'follow'; return { ok: false, msg: 'No hay objetivo.' }; }
+    tg.otid = t.id; e.ai.home.x = p.t.x; e.ai.home.y = p.t.y; e.ai.leash = 40;
+    e.ai.target = t; e.ai.prey = t; e.ai.state = 'chase';
+    return { ok: true, msg: e.name + ' ataca a ' + t.name + '.' };
+  }
+  /* tareas de apoyo */
+  if (tgt && tgt.x !== undefined) { tg.otk = 'point'; tg.ox = tgt.x; tg.oy = tgt.y; }
+  else if (order === 'watch') { tg.otk = 'point'; tg.ox = e.t.x; tg.oy = e.t.y; }
+  tg.taskT = order === 'manure' ? 40 : 0;
+  e.ai.state = 'petwork';
+  const where = tg.otk === 'point' ? ' en ese punto' : ' a tu alrededor';
+  const msgs = { haul: 'recoge el botín' + where, forage: 'forrajea' + where, watch: 'hace de vigía' + where, manure: 'abona' + where };
+  return { ok: true, msg: e.name + ' ' + msgs[order] + '.' };
+};
+E.orderAll = function (order) {
+  const list = E.companionList();
+  let n = 0;
+  for (let i = 0; i < list.length; i++) if (E.setOrder(list[i], order, null).ok) n++;
+  toast(n ? (order === 'stay' ? 'Compañeros quietos (' + n + ').' : 'Compañeros te siguen (' + n + ').') : 'No hay compañeros.', n ? 'good' : '');
+  return n;
+};
+E.releasePet = function (e) {
+  const p = E.player;
+  if (!p || !E.isCompanion(e)) return false;
+  const sd = D.SPECIES[e.species], tg = e.tg;
+  if (p.mount === e) E.dismount();
+  if (tg.mountable && sd && sd.mount && sd.mount.saddle && D.ITEMS[sd.mount.saddle]) Inv.add(p, sd.mount.saddle, 1);
+  tg.tamed = false; tg.owner = null; tg.persist = false; tg.hostile = false;
+  tg.faction = sd ? sd.faction : 'prey';
+  tg.mountable = false; tg.mounted = false; tg.saddle = null; tg.petArmor = 0;
+  tg.tameProgress = 0; tg.order = 'follow'; tg.otid = 0;
+  e.ai.state = 'wander'; e.ai.target = null; e.ai.prey = null; e.ai.path = null; e.ai.tl = null; e.ai.tn = null;
+  e.ai.home.x = e.t.x; e.ai.home.y = e.t.y; e.ai.leash = leashOf(sd);
+  dropCombat(e);
+  fx('heart', e.t.x, e.t.y);
+  A.playAt('tame', e.t.x, e.t.y, p.t.x, p.t.y);
+  toast(e.name + ' vuelve a la naturaleza.', '');
+  return true;
+};
+E.petTarget = function (p) {
+  const ax = cos(p.t.ang), ay = sin(p.t.ang);
+  const lock = E.aim && E.aim.lock;
+  if (lock && !lock.tg.dead && lock.type === 'creature' && !lock.tg.tamed) return { kind: 'enemy', ent: lock, x: lock.t.x, y: lock.t.y };
+  W.Hash.query(p.t.x, p.t.y, 14, E._q3);
+  let best = null, bs = -1e9;
+  for (let i = 0; i < E._q3.length; i++) {
+    const t = E._q3[i];
+    if (t.tg.dead || t.type !== 'creature' || t.tg.tamed || t.tg.mounted) continue;
+    const dx = t.t.x - p.t.x, dy = t.t.y - p.t.y, d = U.len(dx, dy);
+    if (d > 14 || d < 0.2) continue;
+    const dot = (dx / d) * ax + (dy / d) * ay;
+    if (dot < 0.55) continue;
+    const sc = dot * 3 - d * 0.1;
+    if (sc > bs) { bs = sc; best = t; }
+  }
+  if (best) return { kind: 'enemy', ent: best, x: best.t.x, y: best.t.y };
+  for (let k = 1; k <= 9; k++) {
+    const n = W.nodeAt(Math.floor(p.t.x + ax * k), Math.floor(p.t.y + ay * k));
+    const nd = n ? D.NODES[n.key] : null;
+    if (nd && nd.tool === 'hand') return { kind: 'node', node: n, x: n.x + 0.5, y: n.y + 0.5 };
+  }
+  for (let k = 7; k >= 2; k--) {
+    const x = p.t.x + ax * k, y = p.t.y + ay * k;
+    if (W.walkable(Math.floor(x), Math.floor(y), false)) return { kind: 'point', x: x, y: y };
+  }
+  return { kind: 'point', x: p.t.x, y: p.t.y };
+};
+E.orderToTarget = function (e) {
+  const p = E.player;
+  if (!p || !E.isCompanion(e)) return { ok: false, msg: '' };
+  const t = E.petTarget(p);
+  if (t.kind === 'enemy') {
+    if (E.canAttackOrder(e)) return E.setOrder(e, 'attack', { ent: t.ent });
+    return { ok: false, msg: e.name + ' no ataca. Apunta a un recurso o a un punto del suelo.' };
+  }
+  if (t.kind === 'node' && E.isSupport(e)) return E.setOrder(e, 'forage', { x: t.x, y: t.y });
+  return E.setOrder(e, 'goto', { x: t.x, y: t.y });
+};
+function petAnchor(e, p) { return e.tg.otk === 'point' ? { x: e.tg.ox, y: e.tg.oy } : { x: p.t.x, y: p.t.y }; }
+function petGo(e, tx, ty, speed, dt) {
+  const d2 = U.dist2(e.t.x, e.t.y, tx, ty);
+  if (d2 > 36 && !e.ai.path && rngAI().chance(0.05)) requestPath(e, tx, ty, e.tg.flying);
+  if (e.ai.path) followPath(e, speed, dt, e.tg.flying);
+  else stepToward(e, tx, ty, speed, dt, e.tg.flying);
+}
+function petIdle(e, an, speed, dt) {
+  if (U.dist2(e.t.x, e.t.y, an.x, an.y) > 16) petGo(e, an.x, an.y, speed * 1.1, dt);
+  else e.an.walk += dt * 0.3;
+}
+function petFindLoot(e, ax, ay, R) {
+  let best = null, bd = 1e9;
+  for (let i = 0; i < E.loot.length; i++) {
+    const l = E.loot[i];
+    if (l.life <= 0 || l.warned) continue;
+    if (U.dist2(ax, ay, l.x, l.y) > R * R) continue;
+    const d = U.dist2(e.t.x, e.t.y, l.x, l.y);
+    if (d < bd) { bd = d; best = l; }
+  }
+  return best;
+}
+function petHaulStep(e, ax, ay, R, speed, dt) {
+  let tl = e.ai.tl;
+  if (tl && (tl.life <= 0 || tl.warned)) tl = e.ai.tl = null;
+  if (!tl && e.tg.taskT <= 0) { e.tg.taskT = 0.6; tl = e.ai.tl = petFindLoot(e, ax, ay, R); }
+  if (!tl) return false;
+  if (U.dist2(e.t.x, e.t.y, tl.x, tl.y) < 1.5) {
+    E.pickupLoot(tl, false); e.an.bob = 0.4; e.ai.tl = null; e.tg.taskT = 0.25;
+  } else petGo(e, tl.x, tl.y, speed * 1.25, dt);
+  return true;
+}
+const COMPASS = ['este', 'sureste', 'sur', 'suroeste', 'oeste', 'noroeste', 'norte', 'noreste'];
+function updatePetWork(e, dt, speed, p) {
+  if (!p) return;
+  const tg = e.tg, ord = tg.order, an = petAnchor(e, p);
+  tg.taskT -= dt;
+  if (ord === 'haul') {
+    if (!petHaulStep(e, an.x, an.y, 16, speed, dt)) petIdle(e, an, speed, dt);
+    return;
+  }
+  if (ord === 'forage') {
+    let tn = e.ai.tn;
+    if (tn && tn.dead) tn = e.ai.tn = null;
+    if (!tn && tg.taskT <= 0) {
+      tg.taskT = 1.2;
+      let best = null, bd = 1e9;
+      W.nodes.forEach(function (n) {
+        if (n.dead) return;
+        const dx = n.x + 0.5 - an.x, dy = n.y + 0.5 - an.y;
+        if (dx * dx + dy * dy > 225) return;
+        const nd = D.NODES[n.key];
+        if (!nd || nd.tool !== 'hand') return;
+        const d = U.dist2(e.t.x, e.t.y, n.x + 0.5, n.y + 0.5);
+        if (d < bd) { bd = d; best = n; }
+      });
+      tn = e.ai.tn = best;
+    }
+    if (!tn) {
+      if (!petHaulStep(e, e.t.x, e.t.y, 8, speed, dt)) petIdle(e, an, speed, dt);
+      return;
+    }
+    if (U.dist2(e.t.x, e.t.y, tn.x + 0.5, tn.y + 0.5) > 2.6) { petGo(e, tn.x + 0.5, tn.y + 0.5, speed * 1.2, dt); return; }
+    if (tg.taskT > 0) { e.an.walk += dt * 0.4; return; }
+    tg.taskT = 0.8;
+    e.an.atk = 0.3; e.an.bob = 0.4;
+    const res = W.damageNode(tn.x, tn.y, 'hand', 99, E.day);
+    if (!res.ok) { e.ai.tn = null; return; }
+    sfxAt('harvest', tn.x + 0.5, tn.y + 0.5);
+    if (res.broke) {
+      const def = res.def, rng = rngLoot();
+      const yieldB = 1 + E.skillVal(p, 'yield') + E.levelOf(p, 'farming') * B.TRADE_BONUS;
+      const drops = [];
+      for (let i = 0; i < def.drops.length; i++) {
+        const dr = def.drops[i];
+        if (!rng.chance(Math.min(1, dr[3] + (p.luck || 0)))) continue;
+        const n2 = Math.round(rng.int(dr[1], dr[2]) * yieldB);
+        if (n2 > 0) drops.push({ id: dr[0], n: n2, q: 0 });
+      }
+      E.dropLoot(tn.x + 0.5, tn.y + 0.5, drops, { delay: 0.2, toward: e.t });
+      E.addXP(p, 'farming', Math.max(1, Math.ceil(def.xp / 2)));
+      fx('break', tn.x + 0.5, tn.y + 0.5, { tint: def.tint });
+      e.ai.tn = null; tg.taskT = 0.3;
+    }
+    return;
+  }
+  if (ord === 'manure') {
+    if (tg.taskT <= 0) {
+      const rg = rngAI();
+      tg.taskT = (tg.baby ? 110 : 70) + rg.next() * 30;
+      E.dropLoot(e.t.x, e.t.y, [{ id: 'manure', n: 1 + (rg.chance(0.25) ? 1 : 0), q: 0 }], { delay: 0.4, life: 420 });
+      e.an.bob = 0.5; fx('dust', e.t.x, e.t.y);
+      floater(e.t.x, e.t.y - 0.7, 'Estiércol', '#c8a878');
+    }
+    if (U.dist2(e.t.x, e.t.y, an.x, an.y) > 36) { petGo(e, an.x, an.y, speed, dt); return; }
+    e.ai.wanderT -= dt;
+    if (e.ai.wanderT <= 0) {
+      const rg2 = rngAI();
+      e.ai.wanderT = 2 + rg2.next() * 3;
+      const a = rg2.next() * U.TAU, d = 1 + rg2.next() * 3;
+      const wx = an.x + cos(a) * d, wy = an.y + sin(a) * d;
+      if (W.walkable(Math.floor(wx), Math.floor(wy), e.tg.flying)) { e.ai.wx = wx; e.ai.wy = wy; e.ai.hasW = true; }
+    }
+    if (e.ai.hasW) stepToward(e, e.ai.wx, e.ai.wy, speed * 0.4, dt, e.tg.flying);
+    return;
+  }
+  if (ord === 'watch') {
+    if (U.dist2(e.t.x, e.t.y, an.x, an.y) > 1.6) petGo(e, an.x, an.y, speed, dt);
+    else e.an.walk += dt * 0.2;
+    tg.alertT = Math.max(0, (tg.alertT || 0) - dt);
+    if (tg.taskT > 0) return;
+    tg.taskT = 1;
+    W.Hash.query(e.t.x, e.t.y, 26, E._q2);
+    let foe = null, bd = 26 * 26;
+    for (let i = 0; i < E._q2.length; i++) {
+      const t = E._q2[i];
+      if (t.tg.dead || t.type !== 'creature' || t.tg.tamed || t.tg.baby || t.tg.livestock) continue;
+      if (!(t.tg.hostile || t.tg.faction === 'predator' || t.tg.faction === 'undead' ||
+        t.tg.faction === 'bandit' || t.tg.faction === 'mythic' || t.species === 'bandit')) continue;
+      const d = U.dist2(e.t.x, e.t.y, t.t.x, t.t.y);
+      if (d < bd) { bd = d; foe = t; }
+    }
+    if (foe && tg.alertT <= 0) {
+      tg.alertT = 9;
+      const ang = Math.atan2(foe.t.y - e.t.y, foe.t.x - e.t.x);
+      const dir = COMPASS[((Math.round(ang / (PI / 4)) % 8) + 8) % 8];
+      toast('¡Alerta! ' + e.name + ' ve ' + foe.name + ' al ' + dir + ' (' + Math.round(Math.sqrt(bd)) + ' m).', 'bad');
+      A.play('error'); e.an.bob = 0.6;
+    }
+    return;
+  }
+  petIdle(e, an, speed, dt);
+}
+function petCommand(e, sd, p) {
+  const tg = e.tg, ord = tg.order || 'follow';
+  if (ord === 'follow' || !p) return false;
+  const canFight = !!sd && sd.dmg > 0;
+  if (!canFight) {
+    const th = findThreat(e, B.AI_FLEE_RADIUS);
+    if (th) { e.ai.state = 'flee'; e.ai.threat = th; e.ai.target = null; return true; }
+  }
+  if (ord === 'stay') {
+    e.ai.home.x = tg.ox; e.ai.home.y = tg.oy; e.ai.leash = 7;
+    const foe = canFight ? findEnemy(e, 5) : null;
+    if (foe) { e.ai.state = 'chase'; e.ai.target = foe; return true; }
+    if (e.ai.state === 'chase') dropCombat(e);
+    e.ai.state = 'hold'; e.ai.target = null;
+    return true;
+  }
+  if (ord === 'goto') {
+    if (U.dist2(e.t.x, e.t.y, tg.ox, tg.oy) < 1.7) {
+      tg.order = 'stay'; e.ai.home.x = tg.ox; e.ai.home.y = tg.oy; e.ai.leash = 7;
+      e.ai.state = 'hold'; e.ai.path = null;
+      floater(e.t.x, e.t.y - 0.7, 'Aquí', '#efe3c8');
+      return true;
+    }
+    if (U.dist2(p.t.x, p.t.y, tg.ox, tg.oy) > 6400) { E.setOrder(e, 'follow', null); return false; }
+    e.ai.state = 'petgo';
+    return true;
+  }
+  if (ord === 'attack') {
+    const t = E.byId.get(tg.otid);
+    if (!t || t.tg.dead || t.tg.tamed || !canFight || U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) > 3600) {
+      if (t && t.tg.dead) toast(e.name + ' terminó su objetivo.', 'good');
+      tg.order = 'follow'; tg.otid = 0; e.ai.leash = leashOf(sd); e.ai.prey = null;
+      return false;
+    }
+    e.ai.home.x = p.t.x; e.ai.home.y = p.t.y; e.ai.leash = 40;
+    e.ai.state = 'chase'; e.ai.target = t; e.ai.prey = t;
+    return true;
+  }
+  if (PET_TASKS.indexOf(ord) >= 0) {
+    if (tg.otk === 'point' && ord !== 'watch' && U.dist2(p.t.x, p.t.y, tg.ox, tg.oy) > 6400) {
+      E.setOrder(e, 'follow', null);
+      toast(e.name + ' te alcanza: estabas muy lejos.', '');
+      return false;
+    }
+    if (e.ai.mv) dropCombat(e);
+    e.ai.state = 'petwork'; e.ai.target = null;
+    return true;
+  }
+  tg.order = 'follow';
+  return false;
 }
 function think(e) {
   const p = E.player;
@@ -2562,9 +2937,13 @@ function think(e) {
       e.ai.threat = th;
       return;
     }
-    const foe = findEnemy(e, 9);
+    if (petCommand(e, sd, p)) return;
+    const foe = (sd && sd.dmg > 0) ? findEnemy(e, 9) : null;
     if (foe) { e.ai.state = 'chase'; e.ai.target = foe; }
-    else { e.ai.state = 'follow'; e.ai.target = null; dropCombat(e); }
+    else {
+      e.ai.state = 'follow'; e.ai.target = null; dropCombat(e);
+      if (p) { e.ai.home.x = p.t.x; e.ai.home.y = p.t.y; }
+    }
     return;
   }
   if (e.tg.livestock) {
@@ -2576,8 +2955,9 @@ function think(e) {
   if (e.tg.baby) {
     const th = findThreat(e, B.AI_FLEE_RADIUS);
     const dp = p ? U.dist2(e.t.x, e.t.y, p.t.x, p.t.y) : 1e9;
-    e.ai.threat = th || (dp < 16 ? p : null);
-    e.ai.state = e.ai.threat ? 'flee' : 'wander';
+    e.ai.threat = th || (playerSpooks(e, sd, p, dp, 4) ? p : null);
+    if (e.ai.threat) e.ai.state = 'flee';
+    else if (!calmHold(e, sd, p, dp)) e.ai.state = 'wander';
     return;
   }
   if (e.tg.guardian === 'zone') {
@@ -2615,9 +2995,10 @@ function think(e) {
     if (!e.ai.prey && e.ai.rest <= 0.4) e.ai.prey = findPrey(e, B.AI_HUNT_RADIUS);
     if (e.ai.prey) { e.ai.state = 'hunt'; e.ai.target = e.ai.prey; return; }
   }
-  if (beh === 'skittish' && distP < aggro * aggro) {
+  if (beh === 'skittish' && playerSpooks(e, sd, p, distP, aggro)) {
     e.ai.state = 'flee'; e.ai.threat = p; e.ai.target = null; dropCombat(e); return;
   }
+  if (beh === 'skittish' && calmHold(e, sd, p, distP)) return;
   /* 4 · Territorio */
   const homeD2 = U.dist2(e.t.x, e.t.y, e.ai.home.x, e.ai.home.y);
   if (homeD2 > e.ai.leash * e.ai.leash) {
@@ -2905,6 +3286,8 @@ function updateCreature(e, dt) {
     }
     return;
   }
+  /* Confianza de presas domables por comida */
+  if (feedTameable(sd, e) && p && (sd.behavior === 'skittish' || e.tg.baby)) updateEase(e, sd, p, dt);
   /* Vínculo: se gana quieto y cerca */
   if (sd && sd.tame && sd.tame.method === 'bond' && !e.tg.tamed && p) {
     const d2 = U.dist2(e.t.x, e.t.y, p.t.x, p.t.y);
@@ -2961,6 +3344,13 @@ function updateCreature(e, dt) {
     }
     return;
   }
+  if (st === 'hold') {
+    if (U.dist2(e.t.x, e.t.y, e.tg.ox, e.tg.oy) > 1.4) petGo(e, e.tg.ox, e.tg.oy, speed, dt);
+    else if (p) { e.t.ang = U.angDamp(e.t.ang, Math.atan2(p.t.y - e.t.y, p.t.x - e.t.x), 4, dt); e.an.walk += dt * 0.2; }
+    return;
+  }
+  if (st === 'petgo') { petGo(e, e.tg.ox, e.tg.oy, speed * 1.2, dt); return; }
+  if (st === 'petwork') { updatePetWork(e, dt, speed, p); return; }
   if (st === 'follow') {
     const tx = p ? p.t.x : e.ai.home.x, ty = p ? p.t.y : e.ai.home.y;
     const d2 = U.dist2(e.t.x, e.t.y, tx, ty);
@@ -2974,7 +3364,8 @@ function updateCreature(e, dt) {
   if (st === 'flee') {
     const src = e.ai.threat || p || e;
     const dx = e.t.x - src.t.x, dy = e.t.y - src.t.y, d = U.len(dx, dy) || 1;
-    stepToward(e, e.t.x + (dx / d) * 5, e.t.y + (dy / d) * 5, speed * 1.3, dt, e.tg.flying);
+    const calmFlee = src === p && feedTameable(sd, e);
+    stepToward(e, e.t.x + (dx / d) * 5, e.t.y + (dy / d) * 5, speed * (calmFlee ? 1.1 : 1.3), dt, e.tg.flying);
     return;
   }
   if (st === 'return') {
@@ -2987,7 +3378,14 @@ function updateCreature(e, dt) {
     return;
   }
   if (st === 'work') { updateWork(e, dt, speed); return; }
-  if (st === 'idle') { e.an.walk += dt * 0.3; return; }
+  if (st === 'idle') {
+    if (e.ai.curious && p && !p.ko) {
+      const ddx = p.t.x - e.t.x, ddy = p.t.y - e.t.y, dd2 = ddx * ddx + ddy * ddy;
+      if (dd2 > 2.2 * 2.2) stepToward(e, p.t.x, p.t.y, speed * 0.4, dt, false);
+      else e.t.ang = U.angDamp(e.t.ang, Math.atan2(ddy, ddx), 6, dt);
+    } else e.an.walk += dt * 0.3;
+    return;
+  }
   /* Deambular con rutinas de NPC */
   e.ai.wanderT -= dt;
   if (e.ai.wanderT <= 0) {
@@ -3399,6 +3797,7 @@ E.deserialize = function (data) {
         e.ai.home.x = s.hx; e.ai.home.y = s.hy;
         for (const k in s.tg) e.tg[k] = s.tg[k];
         e.tg.dead = false;
+        e.tg.otid = 0; if (e.tg.order === 'attack') e.tg.order = 'follow';
         if (e.tg.zone) {
           for (let z = 0; z < W.zones.length; z++)
             if (W.zones[z].id === e.tg.zone) { e.ai.zone = W.zones[z]; break; }

@@ -1,15 +1,16 @@
 /* ============================================================
-KANATO DE JOTUN · data-items.js — Contenido v4 (parte 2 de 4)
-CAMBIOS v4:
-· Solo 6 estaciones: hand · campfire · workbench · kitchen · forge · alchemy
-  (fundición+herrería+yunque → FORJA · telar+potro+flechas → BANCO ·
-   molino → COCINA)
-· Cada receta lleva `saber` (familia aprendible) y `tier` (por nivel).
-· Supervivencia GRATIS a mano: pico, hacha, azada, caña y arco de madera,
-  flechas caseras, cuerda, antorcha, venda simple, petate, cebo, pienso.
-· `repair` por objeto: arreglar una herramienta rota cuesta 1–2 materiales
-  comunes, no la receta entera.
-· Tier 3 (nivel 31+) = maestría de jefe y legendarios.
+KANATO DE JOTUN · data-items.js — Contenido v5 (parte 2 de 4)
+CAMBIOS v5:
+· Herramientas leídas de D.TOOL_TIERS: cada material trae
+  `speed` (cadencia de golpe), `dur` (usos) y `repair` (coste).
+  Piedra 0,62× → 2,2 s por árbol. Adamantita 1,72× → un golpe.
+· TODO objeto con durabilidad lleva `repair` barato: arreglar
+  cuesta 1 material del tier + 1 común, nunca la receta entera.
+· SEÑUELOS DE DOMA: `feed_tame` (herbívoros/omnívoros) y
+  `meat_lure` (carnívoros) se hacen a mano y valen para cualquier
+  especie: arregla el "no tengo la comida exacta" del tameo.
+· Recetas repartidas en las 6 estaciones reales con saber y tier.
+· Cobertura de todos los ids que usan tiendas, jefes y ganado.
 ============================================================ */
 (function () {
 'use strict';
@@ -18,15 +19,23 @@ if (!CR || !CR.DEF) { console.error('[CR] data-items.js requiere data.js'); retu
 const DEF = CR.DEF, D = CR.DATA, B = D.BAL;
 const I = DEF.item, R = DEF.recipe, N = DEF.nutrition;
 const AMMO = D.AMMO_KINDS, SH = D.SHIELD_KINDS;
+const TIERS = D.TOOL_TIERS, TIER_BY = D.TOOL_BY_ID;
 
-/* Atajos de saber */
-const SM = 'smith', CR2 = 'craft', CK = 'cook', FD = 'field', AL = 'alchemy', MA = 'master';
+/* Saberes */
+const SM = 'smith', CF = 'craft', CK = 'cook', FD = 'field', AL = 'alchemy', MA = 'master';
+
+/* Reparación por material: 1 del tier + 1 común. Piedra: 2 piedra + 1 madera. */
+function repMat(matId) {
+  if (matId === 'stone') return { stone: 2, wood: 1 };
+  const c = {}; c[matId] = 1; c.wood = 1; return c;
+}
+function repCloth(matId) { const c = {}; c[matId] = 1; c.thread = 1; return c; }
 
 /* ==========================================================
 1 · MATERIAS PRIMAS
 ========================================================== */
 const MATS = [
-  ['stone', 'Piedra', 2, 'Roca común. Base de muros y cimientos.'],
+  ['stone', 'Piedra', 2, 'Roca común. Base de muros, cimientos y herramientas de primera hora.'],
   ['wood', 'Madera', 3, 'Troncos. También sirve de combustible.', ['fuel']],
   ['coal', 'Carbón mineral', 5, 'Combustible de alto rendimiento.', ['fuel']],
   ['charcoal', 'Carbón vegetal', 7, 'Leña cocida sin aire. Arde más limpio y más fuerte.', ['fuel']],
@@ -36,10 +45,10 @@ const MATS = [
   ['sulfur', 'Azufre', 9, 'Polvo amarillo. Flechas ígneas y alquimia.'],
   ['obsidian', 'Obsidiana', 26, 'Vidrio volcánico. Filos que no se mellan.'],
   ['ice_shard', 'Esquirla de hielo', 8, 'Hielo que no se derrite. Flechas gélidas.'],
-  ['copper_ore', 'Mineral de cobre', 8, 'Se funde en la forja.'],
-  ['iron_ore', 'Mineral de hierro', 18, 'Se funde en la forja.'],
+  ['copper_ore', 'Mineral de cobre', 8, 'Se pica con pico de piedra, aunque cuesta. Primer paso hacia el metal.'],
+  ['iron_ore', 'Mineral de hierro', 18, 'Necesita pico de cobre o mejor.'],
   ['mithril_ore', 'Mineral de mithril', 45, 'Ligero y frío al tacto.'],
-  ['adamantite_ore', 'Mineral de adamantita', 110, 'Solo la forja más caliente lo rinde.'],
+  ['adamantite_ore', 'Mineral de adamantita', 110, 'Solo el pico más duro la arranca.'],
   ['gold_nugget', 'Pepita de oro', 60, 'Moneda, joya y buen regalo.'],
   ['crystal', 'Cristal corrupto', 35, 'Zumba despacio. Encantamientos.'],
   ['fiber', 'Fibra vegetal', 2, 'Se hilacha en cuerda y tela.'],
@@ -112,7 +121,7 @@ MYTH_MATS.forEach(function (m) {
 });
 
 /* ==========================================================
-2 · FUNDICIÓN Y LADRILLOS → FORJA
+2 · FUNDICIÓN → FORJA (saber Fundición y forja)
 ========================================================== */
 const SMELT = [
   ['copper_bar', 'Lingote de cobre', 20, 'copper_ore', 2, 1, { lv: 5, skill: { artisan: 2 } }],
@@ -131,40 +140,39 @@ SMELT.forEach(function (s) {
 I('obsidian_bar', { name: 'Obsidiana pulida', cat: 'material', value: 60, desc: 'Lámina vítrea para filos superiores.' });
 R('obsidian_bar', 1, [{ id: 'obsidian', n: 2 }, { id: 'coal', n: 1 }], 'forge',
   { fuel: 4, req: { lv: 13, skill: { artisan: 5 } }, saber: SM });
-/* Ladrillo y carbón: sin saber, para que la construcción nunca se atasque */
+/* Ladrillo y carbón: sin saber, la construcción nunca se atasca */
 R('brick', 2, [{ id: 'clay', n: 3 }], 'forge', { fuel: 2, req: { lv: 4, skill: { artisan: 1 } }, xp: 8 });
 R('charcoal', 2, [{ id: 'wood', n: 3 }], 'forge', { fuel: 1, req: { lv: 4, skill: { artisan: 1 } }, xp: 8 });
 R('charcoal', 1, [{ id: 'wood', n: 2 }], 'campfire', { fuel: 2, req: null, xp: 5 });
 
 /* ==========================================================
-3 · TEXTILES Y CURTIDO → BANCO (saber Oficio de banco)
+3 · TEXTILES Y CURTIDO → BANCO
 ========================================================== */
 R('rope', 1, [{ id: 'fiber', n: 3 }], 'hand', { req: null, xp: 4 });
 R('straw', 2, [{ id: 'hay', n: 1 }], 'hand', { req: null, xp: 3 });
 I('needle', { name: 'Aguja de hueso', cat: 'tool', value: 12, stack: 1,
-  tool: { kind: 'needle', dmg: 1, pow: 1, dur: 120, stam: 1 }, desc: 'Cose vendas y ropa fina.' });
+  tool: { kind: 'needle', dmg: 1, pow: 1, dur: 120, stam: 1, speed: 1 }, repair: { bone: 1, flint: 1 },
+  desc: 'Cose vendas y ropa fina.' });
 R('needle', 1, [{ id: 'bone', n: 1 }, { id: 'flint', n: 1 }], 'hand', { req: null, xp: 6 });
-
 const TEX = [
-  ['thread', 2, [{ id: 'fiber', n: 2 }], 4, 2, 6],
-  ['thread', 2, [{ id: 'wool', n: 1 }], 4, 2, 6],
-  ['thread', 2, [{ id: 'crop_cotton', n: 2 }], 4, 2, 6],
-  ['cloth', 1, [{ id: 'thread', n: 3 }], 4, 2, 8],
-  ['linen', 1, [{ id: 'crop_flax', n: 2 }, { id: 'thread', n: 1 }], 6, 3, 12],
-  ['silk', 1, [{ id: 'wyvern_membrane', n: 1 }, { id: 'thread', n: 2 }], 14, 6, 26],
-  ['leather', 1, [{ id: 'hide', n: 2 }, { id: 'salt', n: 1 }], 4, 2, 9],
-  ['leather', 1, [{ id: 'hide', n: 3 }], 4, 2, 7],
-  ['hard_leather', 1, [{ id: 'leather', n: 2 }, { id: 'beeswax', n: 1 }], 8, 3, 16]
+  ['thread', 2, [{ id: 'fiber', n: 2 }], 4, 2, 6, 0],
+  ['thread', 2, [{ id: 'wool', n: 1 }], 4, 2, 6, 0],
+  ['thread', 2, [{ id: 'crop_cotton', n: 2 }], 4, 2, 6, 0],
+  ['cloth', 1, [{ id: 'thread', n: 3 }], 4, 2, 8, 0],
+  ['linen', 1, [{ id: 'crop_flax', n: 2 }, { id: 'thread', n: 1 }], 6, 3, 12, 0],
+  ['silk', 1, [{ id: 'wyvern_membrane', n: 1 }, { id: 'thread', n: 2 }], 14, 6, 26, 0],
+  ['leather', 1, [{ id: 'hide', n: 2 }, { id: 'salt', n: 1 }], 4, 2, 9, 0],
+  ['leather', 1, [{ id: 'hide', n: 3 }], 4, 2, 7, 0],
+  ['hard_leather', 1, [{ id: 'leather', n: 2 }, { id: 'beeswax', n: 1 }], 8, 3, 16, 1]
 ];
 TEX.forEach(function (t, i) {
   R(t[0], t[1], t[2], 'workbench', {
-    id: 'r_tex_' + i, req: { lv: t[3], skill: { artisan: t[4] } }, xp: t[5], saber: CR2,
-    fuel: t[0] === 'hard_leather' ? 1 : 0
+    id: 'r_tex_' + i, req: { lv: t[3], skill: { artisan: t[4] } }, xp: t[5], saber: CF, fuel: t[6]
   });
 });
 
 /* ==========================================================
-4 · MOLINO Y SAL → COCINA (saber Cocina de campaña)
+4 · MOLINO Y SAL → COCINA
 ========================================================== */
 R('flour', 2, [{ tag: 'grain', n: 2 }], 'kitchen', { req: { lv: 4, skill: { artisan: 1 } }, xp: 7, saber: CK });
 R('oil', 1, [{ id: 'crop_sunflower', n: 2 }], 'kitchen', { id: 'r_oil_sun', req: { lv: 5, skill: { artisan: 1 } }, xp: 8, saber: CK });
@@ -172,110 +180,91 @@ R('oil', 1, [{ id: 'crop_flax', n: 2 }], 'kitchen', { id: 'r_oil_flax', req: { l
 R('salt', 2, [{ id: 'sand', n: 3 }], 'kitchen', { fuel: 2, req: { lv: 4, skill: { artisan: 1 } }, xp: 6, saber: CK });
 
 /* ==========================================================
-5 · HERRAMIENTAS
-   Piedra → A MANO, gratis. Metal → FORJA (smith).
-   Madera y útiles → BANCO. Campo → field.
+5 · HERRAMIENTAS · velocidad y durabilidad por tier (v5)
+   cd de golpe = B.GATHER_CD / speed
+   piedra 0,62 → 0,55 s · adamantita 1,72 → 0,20 s
 ========================================================== */
-const TIERS = [
-  { id: 'stone', adj: 'de piedra', mat: 'stone', n: 3, dmg: 6, dur: 60, pow: 1, val: 12, lv: 1 },
-  { id: 'copper', adj: 'de cobre', mat: 'copper_bar', n: 3, dmg: 10, dur: 120, pow: 2, val: 70, lv: 5 },
-  { id: 'iron', adj: 'de hierro', mat: 'iron_bar', n: 3, dmg: 16, dur: 220, pow: 3, val: 170, lv: 7 },
-  { id: 'steel', adj: 'de acero', mat: 'steel_bar', n: 3, dmg: 22, dur: 300, pow: 4, val: 340, lv: 9 },
-  { id: 'obsidian', adj: 'de obsidiana', mat: 'obsidian_bar', n: 2, dmg: 28, dur: 260, pow: 5, val: 480, lv: 13 },
-  { id: 'mithril', adj: 'de mithril', mat: 'mithril_bar', n: 3, dmg: 30, dur: 400, pow: 5, val: 560, lv: 11 },
-  { id: 'adamantite', adj: 'de adamantita', mat: 'adamantite_bar', n: 3, dmg: 42, dur: 550, pow: 6, val: 950, lv: 16 }
-];
-const TIER_BY = {};
-TIERS.forEach(function (t) { TIER_BY[t.id] = t; });
-
-/* Reparación barata: 1 material del tier + 1 común. Nunca la receta entera. */
-function repairCost(t) {
-  if (t.id === 'stone') return { stone: 1, wood: 1 };
-  const c = {}; c[t.mat] = 1; c.wood = 1;
-  return c;
-}
 TIERS.forEach(function (t) {
   const byHand = t.id === 'stone';
   const station = byHand ? 'hand' : 'forge';
   const req = byHand ? null : { lv: t.lv, skill: { artisan: Math.min(6, t.pow) } };
   [['pick', 'Pico'], ['axe', 'Hacha']].forEach(function (k) {
     I(k[0] + '_' + t.id, {
-      name: k[1] + ' ' + t.adj, cat: 'tool', value: t.val, stack: 1,
-      tool: { kind: k[0], dmg: Math.max(2, Math.round(t.dmg * 0.6)), pow: t.pow, dur: t.dur, stam: B.ST_MINE },
-      repair: repairCost(t),
-      desc: 'Poder ' + t.pow + ' · Durabilidad ' + t.dur + '. ' + (k[0] === 'pick' ? 'Roca y vetas.' : 'Árboles y madera.') +
-        (byHand ? ' Se hace a mano, sin mesa.' : '')
+      name: k[1] + ' ' + t.name.toLowerCase(), cat: 'tool', value: t.val, stack: 1,
+      tool: { kind: k[0], dmg: Math.max(2, Math.round(t.dmg * 0.6)), pow: t.pow, dur: t.dur, stam: B.ST_MINE, speed: t.speed },
+      repair: t.repair,
+      desc: 'Poder ' + t.pow + ' · ' + t.dur + ' usos · velocidad ' + t.speed.toFixed(2) + '×. ' +
+        (k[0] === 'pick' ? 'Roca y vetas.' : 'Árboles y madera.') + ' ' + t.note
     });
     R(k[0] + '_' + t.id, 1, [{ id: t.mat, n: t.n }, { id: 'wood', n: 2 }], station, {
       req: req, fuel: byHand ? 0 : 2, skill: k[0] === 'pick' ? 'mining' : 'woodcut', xp: 12,
       saber: byHand ? null : SM
     });
   });
-});
-/* Azadas */
-['stone', 'copper', 'iron', 'steel'].forEach(function (id) {
-  const t = TIER_BY[id], byHand = id === 'stone';
-  I('hoe_' + id, {
-    name: 'Azada ' + t.adj, cat: 'tool', value: Math.round(t.val * 0.7), stack: 1,
-    tool: { kind: 'hoe', dmg: 2, pow: t.pow, dur: t.dur, stam: 4 },
-    repair: repairCost(t), desc: 'Ara la tierra de tus parcelas.'
-  });
-  R('hoe_' + id, 1, [{ id: t.mat, n: 2 }, { id: 'wood', n: 2 }], byHand ? 'hand' : 'forge', {
-    req: byHand ? null : { lv: Math.max(4, t.lv - 1), skill: { artisan: 1 } },
-    fuel: byHand ? 0 : 1, skill: 'farming', xp: 10, saber: byHand ? null : FD
-  });
+  /* Azadas: mismo material, misma progresión */
+  if (['stone', 'copper', 'iron', 'steel'].indexOf(t.id) >= 0) {
+    I('hoe_' + t.id, {
+      name: 'Azada ' + t.name.toLowerCase(), cat: 'tool', value: Math.round(t.val * 0.7), stack: 1,
+      tool: { kind: 'hoe', dmg: 2, pow: t.pow, dur: t.dur, stam: 4, speed: t.speed },
+      repair: t.repair, desc: 'Ara la tierra de tus parcelas. ' + t.dur + ' usos.'
+    });
+    R('hoe_' + t.id, 1, [{ id: t.mat, n: 2 }, { id: 'wood', n: 2 }], byHand ? 'hand' : 'forge', {
+      req: byHand ? null : { lv: Math.max(4, t.lv - 1), skill: { artisan: 1 } },
+      fuel: byHand ? 0 : 1, skill: 'farming', xp: 10, saber: byHand ? null : FD
+    });
+  }
 });
 /* Cañas */
-[['wood', 'de madera', 1, 80, 15, 2], ['iron', 'de hierro', 2, 160, 120, 6], ['mithril', 'de mithril', 3, 300, 420, 12]]
+[['wood', 'de madera', 1, 90, 15, 2, { wood: 1, fiber: 1 }],
+ ['iron', 'de hierro', 2, 180, 120, 6, { iron_bar: 1, wood: 1 }],
+ ['mithril', 'de mithril', 3, 340, 420, 12, { mithril_bar: 1, wood: 1 }]]
 .forEach(function (r) {
   I('rod_' + r[0], {
     name: 'Caña ' + r[1], cat: 'tool', value: r[4], stack: 1,
-    tool: { kind: 'rod', dmg: 2, pow: r[2], dur: r[3], stam: 3 },
-    repair: r[0] === 'wood' ? { wood: 1, fiber: 1 } : (r[0] === 'iron' ? { iron_bar: 1, wood: 1 } : { mithril_bar: 1, wood: 1 }),
-    desc: 'Pesca. Mejora la ventana de captura.'
+    tool: { kind: 'rod', dmg: 2, pow: r[2], dur: r[3], stam: 3, speed: 1 },
+    repair: r[6], desc: 'Pesca. Cada poder amplía la ventana de captura.'
   });
 });
 R('rod_wood', 1, [{ id: 'wood', n: 3 }, { id: 'rope', n: 1 }], 'hand', { req: null, skill: 'fishing', xp: 8 });
 R('rod_iron', 1, [{ id: 'iron_bar', n: 2 }, { id: 'thread', n: 2 }], 'workbench',
-  { req: { lv: 6, skill: { artisan: 2 } }, skill: 'fishing', xp: 12, saber: CR2 });
+  { req: { lv: 6, skill: { artisan: 2 } }, skill: 'fishing', xp: 12, saber: CF });
 R('rod_mithril', 1, [{ id: 'mithril_bar', n: 2 }, { id: 'thread', n: 3 }], 'workbench',
-  { req: { lv: 12, skill: { artisan: 4 } }, skill: 'fishing', xp: 20, saber: CR2 });
-
+  { req: { lv: 12, skill: { artisan: 4 } }, skill: 'fishing', xp: 20, saber: CF });
 I('watering_can', { name: 'Regadera', cat: 'tool', value: 25, stack: 1,
-  tool: { kind: 'water', dmg: 1, pow: 1, dur: 150, stam: 2 }, repair: { copper_bar: 1, wood: 1 },
+  tool: { kind: 'water', dmg: 1, pow: 1, dur: 150, stam: 2, speed: 1 }, repair: { copper_bar: 1, wood: 1 },
   desc: 'Riega cultivos (+35 % crecimiento).' });
 R('watering_can', 1, [{ id: 'copper_bar', n: 2 }, { id: 'wood', n: 2 }], 'workbench',
   { req: { lv: 3, skill: { artisan: 1 } }, xp: 9, saber: FD });
 I('waterskin', { name: 'Odre', cat: 'tool', value: 30, stack: 1,
-  tool: { kind: 'water', dmg: 1, pow: 2, dur: 260, stam: 1 }, repair: { leather: 1, rope: 1 },
+  tool: { kind: 'water', dmg: 1, pow: 2, dur: 260, stam: 1, speed: 1 }, repair: { leather: 1, rope: 1 },
   desc: 'Riega muchas veces antes de rellenarse en agua.' });
 R('waterskin', 1, [{ id: 'leather', n: 2 }, { id: 'rope', n: 1 }], 'workbench',
   { req: { lv: 4, skill: { artisan: 2 } }, xp: 9, saber: FD });
 I('sickle', { name: 'Hoz', cat: 'tool', value: 60, stack: 1,
-  tool: { kind: 'sickle', dmg: 5, pow: 2, dur: 180, stam: 2 }, repair: { iron_bar: 1, wood: 1 },
+  tool: { kind: 'sickle', dmg: 5, pow: 2, dur: 200, stam: 2, speed: 1.1 }, repair: { iron_bar: 1, wood: 1 },
   desc: 'Cosecha 2×2 y rinde más semilla.' });
 R('sickle', 1, [{ id: 'iron_bar', n: 2 }, { id: 'wood', n: 1 }], 'forge',
   { req: { lv: 7, skill: { artisan: 2 } }, fuel: 1, skill: 'farming', xp: 12, saber: FD });
 I('hammer_build', { name: 'Martillo de obra', cat: 'tool', value: 80, stack: 1,
-  tool: { kind: 'hammer', dmg: 7, pow: 2, dur: 200, stam: 3 }, repair: { iron_bar: 1, wood: 1 },
+  tool: { kind: 'hammer', dmg: 7, pow: 2, dur: 220, stam: 3, speed: 1 }, repair: { iron_bar: 1, wood: 1 },
   desc: 'Construye y mejora sin gastar stamina extra.' });
 R('hammer_build', 1, [{ id: 'iron_bar', n: 3 }, { id: 'wood', n: 2 }], 'forge',
   { req: { lv: 7, skill: { artisan: 2 } }, fuel: 1, xp: 12, saber: FD });
 I('repair_kit', { name: 'Kit de reparación', cat: 'misc', value: 70,
-  desc: 'Restaura 40 % de durabilidad del arma, herramienta y escudo equipados.' });
+  desc: 'Restaura 40 % de durabilidad del arma, herramienta y escudo equipados. También revive los rotos.' });
 R('repair_kit', 1, [{ id: 'iron_bar', n: 1 }, { id: 'leather', n: 1 }, { id: 'oil', n: 1 }], 'workbench',
-  { req: { lv: 6, skill: { artisan: 2 } }, xp: 12, saber: CR2 });
-I('whetstone', { name: 'Piedra de afilar', cat: 'misc', value: 45, desc: '+15 % de daño durante un día.' });
+  { req: { lv: 6, skill: { artisan: 2 } }, xp: 12, saber: CF });
+I('whetstone', { name: 'Piedra de afilar', cat: 'misc', value: 45, desc: '+15 % de daño durante un buen rato.' });
 R('whetstone', 1, [{ id: 'flint', n: 2 }, { id: 'stone', n: 2 }], 'hand', { req: null, xp: 8 });
 I('torch', { name: 'Antorcha', cat: 'tool', value: 8, stack: 1,
-  tool: { kind: 'torch', dmg: 3, pow: 1, dur: 240, stam: 1 }, light: 110, repair: { wood: 1, fiber: 1 },
+  tool: { kind: 'torch', dmg: 3, pow: 1, dur: 240, stam: 1, speed: 1 }, light: 110, repair: { wood: 1, fiber: 1 },
   desc: 'Ilumina la noche. Se consume con el tiempo.' });
 R('torch', 2, [{ id: 'wood', n: 1 }, { id: 'fiber', n: 1 }], 'hand', { req: null, xp: 3 });
 I('lantern', { name: 'Farol de aceite', cat: 'tool', value: 140, stack: 1,
-  tool: { kind: 'lantern', dmg: 1, pow: 1, dur: 900, stam: 1 }, light: 170, repair: { copper_bar: 1, oil: 1 },
+  tool: { kind: 'lantern', dmg: 1, pow: 1, dur: 900, stam: 1, speed: 1 }, light: 170, repair: { copper_bar: 1, oil: 1 },
   desc: 'Luz estable y duradera. No se apaga con la lluvia.' });
 R('lantern', 1, [{ id: 'copper_bar', n: 2 }, { id: 'sand', n: 2 }, { id: 'oil', n: 1 }], 'workbench',
-  { req: { lv: 7, skill: { artisan: 3 } }, xp: 16, saber: CR2 });
+  { req: { lv: 7, skill: { artisan: 3 } }, xp: 16, saber: CF });
 
 /* ==========================================================
 6 · ARMAS CUERPO A CUERPO
@@ -283,9 +272,9 @@ R('lantern', 1, [{ id: 'copper_bar', n: 2 }, { id: 'sand', n: 2 }, { id: 'oil', 
 TIERS.forEach(function (t) {
   const byHand = t.id === 'stone';
   I('sword_' + t.id, {
-    name: 'Espada ' + t.adj, cat: 'weapon', value: Math.round(t.val * 1.2), stack: 1,
+    name: 'Espada ' + t.name.toLowerCase(), cat: 'weapon', value: Math.round(t.val * 1.2), stack: 1,
     weapon: { kind: 'sword', dmg: t.dmg, dur: t.dur, reach: B.REACH, speed: 1.0 },
-    repair: repairCost(t), desc: 'Daño ' + t.dmg + ' · Combo de 4 golpes.'
+    repair: t.repair, desc: 'Daño ' + t.dmg + ' · Combo de 4 golpes · ' + t.dur + ' usos.'
   });
   R('sword_' + t.id, 1, [{ id: t.mat, n: t.n }, { id: 'wood', n: 1 }, { id: byHand ? 'fiber' : 'leather', n: 1 }],
     byHand ? 'workbench' : 'forge', {
@@ -297,9 +286,9 @@ TIERS.forEach(function (t) {
 .forEach(function (s) {
   const t = TIER_BY[s[0]];
   I('spear_' + s[0], {
-    name: 'Lanza ' + t.adj, cat: 'weapon', value: Math.round(t.val * 1.1), stack: 1,
+    name: 'Lanza ' + t.name.toLowerCase(), cat: 'weapon', value: Math.round(t.val * 1.1), stack: 1,
     weapon: { kind: 'spear', dmg: s[1], dur: t.dur, reach: B.SPEAR_REACH, speed: 0.85 },
-    repair: repairCost(t), desc: 'Mayor alcance y empuje, más lenta. Daño ' + s[1] + '.'
+    repair: t.repair, desc: 'Mayor alcance y empuje, más lenta. Daño ' + s[1] + '.'
   });
   R('spear_' + s[0], 1, [{ id: t.mat, n: 2 }, { id: 'wood', n: 3 }], 'forge',
     { req: { lv: s[2], skill: { might: 2, artisan: 2 } }, fuel: 2, skill: 'combat', xp: 14, saber: SM });
@@ -307,34 +296,34 @@ TIERS.forEach(function (t) {
 [['iron', 19, 7], ['steel', 26, 10]].forEach(function (m) {
   const t = TIER_BY[m[0]];
   I('mace_' + m[0], {
-    name: 'Maza ' + t.adj, cat: 'weapon', value: Math.round(t.val * 1.15), stack: 1,
+    name: 'Maza ' + t.name.toLowerCase(), cat: 'weapon', value: Math.round(t.val * 1.15), stack: 1,
     weapon: { kind: 'mace', dmg: m[1], dur: t.dur, reach: B.REACH * 0.92, speed: 0.78, guardBreak: 0.5 },
-    repair: repairCost(t), desc: 'Rompe guardias y aturde. Daño ' + m[1] + '.'
+    repair: t.repair, desc: 'Rompe guardias y aturde. Daño ' + m[1] + '.'
   });
   R('mace_' + m[0], 1, [{ id: t.mat, n: 3 }, { id: 'wood', n: 2 }], 'forge',
     { req: { lv: m[2], skill: { might: 3, artisan: 2 } }, fuel: 2, skill: 'combat', xp: 16, saber: SM });
 });
 I('warhammer_steel', { name: 'Martillo de guerra', cat: 'weapon', value: 520, stack: 1,
-  weapon: { kind: 'hammer', dmg: 34, dur: 320, reach: B.REACH, speed: 0.62, guardBreak: 1, knock: 4 },
+  weapon: { kind: 'hammer', dmg: 34, dur: 340, reach: B.REACH, speed: 0.62, guardBreak: 1, knock: 4 },
   repair: { steel_bar: 1, wood: 1 }, desc: 'Lentísimo. Cada golpe conectado derriba.' });
 R('warhammer_steel', 1, [{ id: 'steel_bar', n: 4 }, { id: 'wood', n: 3 }, { id: 'leather', n: 2 }], 'forge',
   { req: { lv: 12, skill: { might: 5, artisan: 4 } }, fuel: 2, skill: 'combat', xp: 24, saber: SM });
 I('dagger_iron', { name: 'Daga de hierro', cat: 'weapon', value: 130, stack: 1,
-  weapon: { kind: 'dagger', dmg: 11, dur: 180, reach: B.REACH * 0.75, speed: 1.5, crit: 0.14 },
+  weapon: { kind: 'dagger', dmg: 11, dur: 200, reach: B.REACH * 0.75, speed: 1.5, crit: 0.14 },
   repair: { iron_bar: 1, leather: 1 }, desc: 'Rapidísima y con crítico alto. Ideal tras un parry.' });
 R('dagger_iron', 1, [{ id: 'iron_bar', n: 2 }, { id: 'leather', n: 1 }], 'forge',
   { req: { lv: 6, skill: { might: 1, artisan: 2 } }, fuel: 1, skill: 'combat', xp: 12, saber: SM });
 
 /* ==========================================================
-7 · ARCOS Y BALLESTAS → BANCO (saber Oficio de banco)
+7 · ARCOS Y BALLESTAS → BANCO (a mano el corto)
 ========================================================== */
 const BOWS = [
-  ['bow_wood', 'Arco corto', 8, 1.0, 90, 15, ['wood', 3, 'rope', 1], 1, 0, true],
-  ['bow_hunter', 'Arco recurvo', 13, 0.9, 150, 120, ['wood', 3, 'hard_leather', 1, 'rope', 1], 5, 2, false],
-  ['bow_composite', 'Arco compuesto', 19, 0.8, 220, 300, ['iron_bar', 2, 'hard_leather', 2, 'thread', 3], 8, 3, false],
-  ['crossbow_iron', 'Ballesta de hierro', 26, 1.3, 200, 340, ['iron_bar', 4, 'wood', 3, 'rope', 2], 9, 3, false],
-  ['bow_mithril', 'Arco de mithril', 27, 0.7, 340, 620, ['mithril_bar', 3, 'silk', 2, 'unicorn_hair', 1], 12, 5, false],
-  ['crossbow_steel', 'Ballesta de acero', 36, 1.2, 300, 700, ['steel_bar', 4, 'hard_leather', 2, 'thread', 3], 13, 5, false]
+  ['bow_wood', 'Arco corto', 8, 1.0, 100, 15, ['wood', 3, 'rope', 1], 1, 0, true],
+  ['bow_hunter', 'Arco recurvo', 13, 0.9, 170, 120, ['wood', 3, 'hard_leather', 1, 'rope', 1], 5, 2, false],
+  ['bow_composite', 'Arco compuesto', 19, 0.8, 240, 300, ['iron_bar', 2, 'hard_leather', 2, 'thread', 3], 8, 3, false],
+  ['crossbow_iron', 'Ballesta de hierro', 26, 1.3, 220, 340, ['iron_bar', 4, 'wood', 3, 'rope', 2], 9, 3, false],
+  ['bow_mithril', 'Arco de mithril', 27, 0.7, 360, 620, ['mithril_bar', 3, 'silk', 2, 'unicorn_hair', 1], 12, 5, false],
+  ['crossbow_steel', 'Ballesta de acero', 36, 1.2, 320, 700, ['steel_bar', 4, 'hard_leather', 2, 'thread', 3], 13, 5, false]
 ];
 BOWS.forEach(function (b) {
   const cross = b[0].indexOf('crossbow') === 0;
@@ -349,12 +338,12 @@ BOWS.forEach(function (b) {
   for (let i = 0; i < b[5].length; i += 2) ing.push({ id: b[5][i], n: b[5][i + 1] });
   R(b[0], 1, ing, b[9] ? 'hand' : 'workbench', {
     req: b[9] ? null : { lv: b[7], skill: { marks: b[8], artisan: Math.min(5, b[8] + 1) } },
-    skill: 'combat', xp: 18, saber: b[9] ? null : CR2
+    skill: 'combat', xp: 18, saber: b[9] ? null : CF
   });
 });
 
 /* ==========================================================
-8 · MUNICIONES (9 tipos) → BANCO
+8 · MUNICIONES (9)
 ========================================================== */
 const ARROW_DEF = [
   ['basic', 'arrow_basic', 'Flecha de sílex', 4, ['wood', 1, 'flint', 1, 'feather', 1], 10, 4, 2],
@@ -376,27 +365,27 @@ ARROW_DEF.forEach(function (a) {
   });
   const ing = [];
   for (let i = 0; i < a[4].length; i += 2) ing.push({ id: a[4][i], n: a[4][i + 1] });
-  R(a[1], a[5], ing, 'workbench', { req: { lv: a[6], skill: { marks: a[7] } }, skill: 'combat', xp: 8, saber: CR2 });
+  R(a[1], a[5], ing, 'workbench', { req: { lv: a[6], skill: { marks: a[7] } }, skill: 'combat', xp: 8, saber: CF });
 });
-/* Flecha casera: a mano, con fibra en lugar de pluma. Gratis siempre. */
+/* Flecha casera: a mano, con fibra. Gratis siempre. */
 R('arrow_basic', 3, [{ id: 'wood', n: 1 }, { id: 'flint', n: 1 }, { id: 'fiber', n: 1 }], 'hand',
   { id: 'r_arrow_basic_hand', req: null, skill: 'combat', xp: 4 });
 I('quiver', { name: 'Carcaj', cat: 'bag', value: 160, stack: 1, bag: { slots: 0, ammo: 60 },
   desc: 'Guarda 60 flechas sin ocupar la mochila.' });
 R('quiver', 1, [{ id: 'leather', n: 3 }, { id: 'thread', n: 2 }], 'workbench',
-  { req: { lv: 6, skill: { marks: 2, artisan: 2 } }, xp: 12, saber: CR2 });
+  { req: { lv: 6, skill: { marks: 2, artisan: 2 } }, xp: 12, saber: CF });
 
 /* ==========================================================
 9 · ESCUDOS
 ========================================================== */
 const SHIELDS = [
-  ['buckler', 'shield_buckler', 'Broquel de cuero', 'leather', 4, 90, 40, 2, 1, 'workbench', CR2],
-  ['round', 'shield_round_wood', 'Escudo redondo de madera', 'wood', 5, 100, 45, 2, 1, 'workbench', null],
-  ['round', 'shield_round', 'Escudo redondo de hierro', 'iron_bar', 9, 200, 190, 6, 2, 'forge', SM],
-  ['kite', 'shield_kite', 'Escudo cometa de acero', 'steel_bar', 13, 280, 380, 9, 3, 'forge', SM],
-  ['spiked', 'shield_spiked', 'Escudo de púas', 'steel_bar', 11, 240, 420, 10, 4, 'forge', SM],
-  ['tower', 'shield_tower', 'Pavés de acero', 'steel_bar', 18, 360, 560, 12, 5, 'forge', SM],
-  ['warding', 'shield_warding', 'Égida rúnica', 'mithril_bar', 15, 320, 760, 14, 6, 'forge', SM]
+  ['buckler', 'shield_buckler', 'Broquel de cuero', 'leather', 4, 100, 40, 2, 1, 'workbench', CF],
+  ['round', 'shield_round_wood', 'Escudo redondo de madera', 'wood', 5, 110, 45, 2, 1, 'workbench', null],
+  ['round', 'shield_round', 'Escudo redondo de hierro', 'iron_bar', 9, 220, 190, 6, 2, 'forge', SM],
+  ['kite', 'shield_kite', 'Escudo cometa de acero', 'steel_bar', 13, 300, 380, 9, 3, 'forge', SM],
+  ['spiked', 'shield_spiked', 'Escudo de púas', 'steel_bar', 11, 260, 420, 10, 4, 'forge', SM],
+  ['tower', 'shield_tower', 'Pavés de acero', 'steel_bar', 18, 380, 560, 12, 5, 'forge', SM],
+  ['warding', 'shield_warding', 'Égida rúnica', 'mithril_bar', 15, 340, 760, 14, 6, 'forge', SM]
 ];
 SHIELDS.forEach(function (s) {
   const k = SH[s[0]];
@@ -404,7 +393,7 @@ SHIELDS.forEach(function (s) {
     name: s[2], cat: 'shield', value: s[6], stack: 1,
     shield: { kind: s[0], def: s[4], dur: s[5], reduce: k.reduce, parry: k.parry, arc: k.arc,
               weight: k.weight, bash: k.bash, ward: s[0] === 'warding' },
-    repair: s[3] === 'wood' ? { wood: 2, fiber: 1 } : (s[3] === 'leather' ? { leather: 1, wood: 1 } : { [s[3]]: 1, leather: 1 }),
+    repair: s[3] === 'wood' ? { wood: 2, fiber: 1 } : (s[3] === 'leather' ? { leather: 1, wood: 1 } : repMat(s[3])),
     desc: k.desc + ' Bloqueo ' + Math.round(k.reduce * 100) + ' % · Parry ' + Math.round(k.parry * 100) + ' % · Defensa ' + s[4] + '.'
   });
   const ing = [{ id: s[3], n: s[0] === 'tower' ? 6 : 3 }, { id: 'leather', n: 2 }];
@@ -420,28 +409,20 @@ SHIELDS.forEach(function (s) {
 10 · ARMADURAS
 ========================================================== */
 const ARMOR_SETS = [
-  { id: 'cloth', adj: 'de tela', mat: 'cloth', def: [1, 2, 1], n: [2, 3, 2], val: [10, 16, 10], st: 'workbench', lv: 2, sk: 1, saber: CR2,
-    pieces: ['Capucha', 'Túnica', 'Calzas'], rep: 'cloth' },
-  { id: 'leather', adj: 'de cuero', mat: 'leather', def: [3, 5, 3], n: [2, 3, 2], val: [40, 65, 40], st: 'workbench', lv: 4, sk: 2, saber: CR2,
-    pieces: ['Gorro', 'Jubón', 'Pantalones'], rep: 'leather' },
-  { id: 'hard_leather', adj: 'de cuero endurecido', mat: 'hard_leather', def: [5, 8, 5], n: [2, 3, 2], val: [95, 150, 95], st: 'workbench', lv: 8, sk: 3, saber: CR2,
-    pieces: ['Casco', 'Peto', 'Grebas'], rep: 'hard_leather' },
-  { id: 'iron', adj: 'de hierro', mat: 'iron_bar', def: [6, 10, 6], n: [3, 5, 3], val: [150, 240, 150], st: 'forge', lv: 8, sk: 3, saber: SM,
-    pieces: ['Yelmo', 'Coraza', 'Grebas'], rep: 'iron_bar' },
-  { id: 'steel', adj: 'de acero', mat: 'steel_bar', def: [9, 15, 9], n: [3, 5, 3], val: [290, 470, 290], st: 'forge', lv: 11, sk: 4, saber: SM,
-    pieces: ['Yelmo', 'Coraza', 'Grebas'], rep: 'steel_bar' },
-  { id: 'mithril', adj: 'de mithril', mat: 'mithril_bar', def: [13, 21, 13], n: [3, 5, 3], val: [360, 580, 360], st: 'forge', lv: 14, sk: 5, saber: SM,
-    pieces: ['Yelmo', 'Coraza', 'Grebas'], rep: 'mithril_bar' },
-  { id: 'adamantite', adj: 'de adamantita', mat: 'adamantite_bar', def: [18, 28, 18], n: [4, 6, 4], val: [1050, 1600, 1050], st: 'forge', lv: 18, sk: 7, saber: SM,
-    pieces: ['Yelmo', 'Coraza', 'Grebas'], rep: 'adamantite_bar' }
+  { id: 'cloth', adj: 'de tela', mat: 'cloth', def: [1, 2, 1], n: [2, 3, 2], val: [10, 16, 10], st: 'workbench', lv: 2, sk: 1, saber: CF, pieces: ['Capucha', 'Túnica', 'Calzas'] },
+  { id: 'leather', adj: 'de cuero', mat: 'leather', def: [3, 5, 3], n: [2, 3, 2], val: [40, 65, 40], st: 'workbench', lv: 4, sk: 2, saber: CF, pieces: ['Gorro', 'Jubón', 'Pantalones'] },
+  { id: 'hard_leather', adj: 'de cuero endurecido', mat: 'hard_leather', def: [5, 8, 5], n: [2, 3, 2], val: [95, 150, 95], st: 'workbench', lv: 8, sk: 3, saber: CF, pieces: ['Casco', 'Peto', 'Grebas'] },
+  { id: 'iron', adj: 'de hierro', mat: 'iron_bar', def: [6, 10, 6], n: [3, 5, 3], val: [150, 240, 150], st: 'forge', lv: 8, sk: 3, saber: SM, pieces: ['Yelmo', 'Coraza', 'Grebas'] },
+  { id: 'steel', adj: 'de acero', mat: 'steel_bar', def: [9, 15, 9], n: [3, 5, 3], val: [290, 470, 290], st: 'forge', lv: 11, sk: 4, saber: SM, pieces: ['Yelmo', 'Coraza', 'Grebas'] },
+  { id: 'mithril', adj: 'de mithril', mat: 'mithril_bar', def: [13, 21, 13], n: [3, 5, 3], val: [360, 580, 360], st: 'forge', lv: 14, sk: 5, saber: SM, pieces: ['Yelmo', 'Coraza', 'Grebas'] },
+  { id: 'adamantite', adj: 'de adamantita', mat: 'adamantite_bar', def: [18, 28, 18], n: [4, 6, 4], val: [1050, 1600, 1050], st: 'forge', lv: 18, sk: 7, saber: SM, pieces: ['Yelmo', 'Coraza', 'Grebas'] }
 ];
 const ARM_SLOTS = ['head', 'chest', 'legs'];
 ARMOR_SETS.forEach(function (s) {
   ARM_SLOTS.forEach(function (slot, i) {
-    const rep = {}; rep[s.rep] = 1; rep.thread = 1;
     I(s.id + '_' + slot, {
       name: s.pieces[i] + ' ' + s.adj, cat: 'armor', value: s.val[i], stack: 1,
-      armor: { slot: slot, def: s.def[i], set: s.id }, repair: rep,
+      armor: { slot: slot, def: s.def[i], set: s.id }, repair: repCloth(s.mat),
       desc: 'Defensa ' + s.def[i] + '. Conjunto ' + s.adj + '.'
     });
     R(s.id + '_' + slot, 1, [{ id: s.mat, n: s.n[i] }, { id: 'thread', n: 1 }], s.st, {
@@ -450,8 +431,7 @@ ARMOR_SETS.forEach(function (s) {
     });
   });
 });
-/* Bardas */
-[['leather', 4, 60, 'leather', 4, 'workbench', 4, 2, CR2],
+[['leather', 4, 60, 'leather', 4, 'workbench', 4, 2, CF],
  ['iron', 8, 200, 'iron_bar', 4, 'forge', 8, 3, SM],
  ['steel', 12, 380, 'steel_bar', 4, 'forge', 11, 4, SM],
  ['mithril', 18, 620, 'mithril_bar', 4, 'forge', 14, 6, SM]]
@@ -468,7 +448,7 @@ ARMOR_SETS.forEach(function (s) {
 });
 
 /* ==========================================================
-11 · MOCHILAS → BANCO
+11 · MOCHILAS
 ========================================================== */
 [['small', 6, 'pequeña', 90, ['cloth', 4, 'leather', 2], 3, 1],
  ['medium', 10, 'mediana', 220, ['leather', 6, 'iron_bar', 1], 6, 2],
@@ -479,11 +459,11 @@ ARMOR_SETS.forEach(function (s) {
     bag: { slots: b[1] }, desc: '+' + b[1] + ' espacios de inventario.' });
   const ing = [];
   for (let i = 0; i < b[4].length; i += 2) ing.push({ id: b[4][i], n: b[4][i + 1] });
-  R('bag_' + b[0], 1, ing, 'workbench', { req: { lv: b[5], skill: { artisan: b[6] } }, xp: 14, saber: CR2 });
+  R('bag_' + b[0], 1, ing, 'workbench', { req: { lv: b[5], skill: { artisan: b[6] } }, xp: 14, saber: CF });
 });
 
 /* ==========================================================
-12 · SILLAS DE MONTAR → BANCO (Afinidad)
+12 · SILLAS DE MONTAR
 ========================================================== */
 const SADDLES = [
   ['horse', 'caballo', 120, ['leather', 4, 'iron_bar', 2], 3, 1],
@@ -508,7 +488,7 @@ SADDLES.forEach(function (s) {
   const ing = [];
   for (let i = 0; i < s[3].length; i += 2) ing.push({ id: s[3][i], n: s[3][i + 1] });
   R('saddle_' + s[0], 1, ing, 'workbench',
-    { req: { lv: s[4], skill: { beast: s[5], artisan: Math.min(6, s[5]) } }, xp: 18, saber: CR2 });
+    { req: { lv: s[4], skill: { beast: s[5], artisan: Math.min(6, s[5]) } }, xp: 18, saber: CF });
 });
 
 /* ==========================================================
@@ -559,7 +539,6 @@ function food(id, name, value, size, prep, rarity, extra, desc, station, ing, re
   if (station && ing) R(id, n || 1, ing, station, { req: req || null, skill: 'cooking', xp: B.XP_COOK, saber: saber || null });
   return nut;
 }
-/* Crudos */
 food('berry', 'Bayas', 2, 'tiny', 'raw', 'common', { st: 2 }, 'Del arbusto.');
 food('apple', 'Manzana', 4, 'small', 'raw', 'common', { st: 4 }, 'Del manzano.');
 food('mushroom', 'Setas', 3, 'tiny', 'raw', 'common', { hp: -1 }, 'Mejor cocinadas.');
@@ -569,8 +548,7 @@ food('raw_meat', 'Carne cruda', 6, 'medium', 'raw', 'common', { hp: -3 }, 'Cocí
 food('raw_poultry', 'Carne de ave cruda', 5, 'small', 'raw', 'common', { hp: -3 }, 'Gallina o pato.');
 food('raw_game', 'Carne de caza cruda', 9, 'medium', 'raw', 'uncommon', { hp: -2 }, 'Ciervo, jabalí o bisonte.');
 food('truffle', 'Trufa', 30, 'tiny', 'raw', 'exotic', { st: 10, hp: 6 }, 'Producto del cerdo. Muy cotizada.');
-
-/* Fogata: lo esencial GRATIS (supervivencia), lo elaborado con saber Cocina */
+/* Fogata: lo esencial gratis */
 food('cooked_meat', 'Carne asada', 16, 'medium', 'cooked', 'common', { hp: 12 }, 'Al fuego directo.',
   'campfire', [{ id: 'raw_meat', n: 1 }], null);
 food('cooked_poultry', 'Ave asada', 14, 'small', 'cooked', 'common', { hp: 9 }, 'Crujiente por fuera.',
@@ -591,7 +569,6 @@ food('flatbread', 'Torta de ceniza', 8, 'small', 'simple', 'common', { st: 8 }, 
   'campfire', [{ id: 'flour', n: 1 }], { lv: 4 }, 1, CK);
 food('dried_meat', 'Cecina', 18, 'small', 'simple', 'common', { st: 14, foodMul: 1.1 }, 'Dura semanas. Ideal para viajar.',
   'campfire', [{ id: 'raw_meat', n: 2 }, { id: 'salt', n: 1 }], { lv: 5 }, 3, CK);
-
 /* Cocina */
 food('bread', 'Pan', 14, 'medium', 'cooked', 'common', { st: 12 }, 'La base de toda mesa.',
   'kitchen', [{ id: 'flour', n: 2 }], { lv: 3, skill: { artisan: 1 } }, 2, CK);
@@ -644,7 +621,6 @@ food('honey_cake', 'Pastel de miel', 46, 'large', 'master', 'rare', { hp: 30, st
   'El postre de las bodas de Vhalor.',
   'kitchen', [{ id: 'flour', n: 3 }, { id: 'honey', n: 2 }, { id: 'egg', n: 2 }, { id: 'butter', n: 1 }],
   { lv: 12, skill: { artisan: 5 } }, 1, CK);
-/* Bebidas */
 food('ale', 'Cerveza de cebada', 16, 'small', 'refined', 'common', { foodMul: 0.4, st: 28, hp: 4 }, 'Espumosa y honesta.',
   'kitchen', [{ tag: 'grain', n: 3 }, { id: 'honey', n: 1 }], { lv: 6, skill: { artisan: 2 } }, 1, CK);
 food('mead', 'Hidromiel', 20, 'small', 'refined', 'uncommon', { foodMul: 0.4, st: 34, hp: 6, buff: 'might', buffT: 180 },
@@ -655,13 +631,13 @@ food('cider', 'Sidra de manzana', 22, 'small', 'refined', 'uncommon', { foodMul:
 food('wine', 'Vino de la casa', 40, 'small', 'master', 'rare', { foodMul: 0.4, st: 36, hp: 12, buff: 'luck', buffT: 240 },
   'Uva del sur. Se sirve en las bodas.',
   'kitchen', [{ id: 'crop_grape', n: 4 }, { id: 'honey', n: 1 }], { lv: 11, skill: { artisan: 4 } }, 1, CK);
-/* TIER 3 · maestría culinaria */
+/* Tier 3 · maestría culinaria */
 food('truffle_risotto', 'Risotto de trufa', 90, 'feast', 'master', 'exotic', { hp: 44, st: 40, buff: 'focus', buffT: 300 },
   'El plato más caro que se cocina en Vhalor.',
   'kitchen', [{ id: 'truffle', n: 2 }, { id: 'crop_rice', n: 3 }, { id: 'cheese', n: 1 }, { id: 'butter', n: 1 }],
   { lv: 31, skill: { artisan: 8 } }, 1, MA);
 food('feast', 'Banquete de Vhalor', 160, 'feast', 'master', 'exotic', { hp: 70, st: 60, foodMul: 1.3, buff: 'all', buffT: 420 },
-  'Para compartir con toda tu household.',
+  'Para compartir con toda tu casa.',
   'kitchen', [{ id: 'roast', n: 1 }, { id: 'hearty_stew', n: 1 }, { id: 'honey_cake', n: 1 }, { id: 'cheese', n: 1 }],
   { lv: 33, skill: { artisan: 9 } }, 1, MA);
 
@@ -677,11 +653,10 @@ heal('bandage_simple', 'Venda simple', 10, 'heal', { hp: 8, stopBleed: true, cas
   'hand', [{ id: 'fiber', n: 2 }], null, 2, null);
 heal('bandage_clean', 'Venda limpia', 26, 'heal', { hp: 22, stopBleed: true, cast: 1.1 },
   'Lino hervido. Cierra 22 de vida sin infectar.',
-  'workbench', [{ id: 'linen', n: 1 }, { id: 'salt', n: 1 }], { lv: 6, skill: { artisan: 2 } }, 2, CR2);
+  'workbench', [{ id: 'linen', n: 1 }, { id: 'salt', n: 1 }], { lv: 6, skill: { artisan: 2 } }, 2, CF);
 heal('splint', 'Férula', 30, 'heal', { cure: 'slow', st: 30, cast: 1.6 },
   'Entablilla una pierna: quita la ralentización y devuelve energía.',
-  'workbench', [{ id: 'wood', n: 2 }, { id: 'cloth', n: 1 }], { lv: 5 }, 1, CR2);
-/* Alambique de entrada (nivel 8–10): sin saber, para que la estación sirva al llegar */
+  'workbench', [{ id: 'wood', n: 2 }, { id: 'cloth', n: 1 }], { lv: 5 }, 1, CF);
 heal('potion_heal_s', 'Poción menor de salud', 30, 'potion', { instant: { food: 0, hp: 40 } },
   'Restaura 40 de salud al instante.',
   'alchemy', [{ tag: 'herbany', n: 2 }, { id: 'berry', n: 2 }], { lv: 8, skill: { artisan: 3 } }, 1, null);
@@ -697,7 +672,6 @@ heal('antidote', 'Antídoto', 32, 'heal', { cure: 'poison', hp: 12, cast: 0.8 },
 heal('bandage_herb', 'Venda con hierbas', 48, 'heal', { hp: 34, stopBleed: true, regen: 1.2, regenT: 20, cast: 1.0 },
   'Cierra 34 y regenera durante 20 s.',
   'alchemy', [{ id: 'linen', n: 1 }, { tag: 'herbany', n: 2 }, { id: 'honey', n: 1 }], { lv: 10, skill: { artisan: 4 } }, 2, null);
-/* Alquimia avanzada (nivel 11+): saber Alquimia */
 heal('potion_heal_m', 'Poción de salud', 70, 'potion', { instant: { food: 0, hp: 90 } }, 'Restaura 90 de salud.',
   'alchemy', [{ tag: 'herbany', n: 3 }, { id: 'honey', n: 1 }, { id: 'crystal', n: 1 }], { lv: 11, skill: { artisan: 4 } }, 1, AL);
 heal('potion_fire_res', 'Bálsamo ígneo', 80, 'potion', { instant: { food: 0 }, buff: 'fireRes', buffT: 300, cure: 'burn' },
@@ -722,7 +696,7 @@ heal('holy_water', 'Agua bendita', 15, 'potion', { instant: { food: 0, hp: 20, c
   'Bendecida por Maera. Cura el veneno.', null, null, null);
 
 /* ==========================================================
-17 · CAMAS · el petate se hace A MANO para poder dormir pronto
+17 · CAMAS · el petate se hace A MANO
 ========================================================== */
 I('bed_roll', { name: 'Petate enrollado', cat: 'bed', value: 30, stack: 1,
   bed: { tier: 0, heal: B.SLEEP_OUTDOOR_HEAL, ambush: B.SLEEP_OUTDOOR_AMBUSH, portable: true },
@@ -731,15 +705,15 @@ R('bed_roll', 1, [{ id: 'straw', n: 4 }, { id: 'fiber', n: 2 }, { id: 'rope', n:
 I('bed_straw', { name: 'Cama de paja', cat: 'bed', value: 70, stack: 1,
   bed: { tier: 1, heal: 0.85, ambush: 0.06 }, desc: 'Para tu primera casa. Descanso decente.' });
 R('bed_straw', 1, [{ id: 'wood', n: 4 }, { id: 'straw', n: 6 }, { id: 'cloth', n: 2 }], 'workbench',
-  { req: { lv: 3, skill: { artisan: 1 } }, xp: 12, saber: CR2 });
+  { req: { lv: 3, skill: { artisan: 1 } }, xp: 12, saber: CF });
 I('bed_wood', { name: 'Cama de madera', cat: 'bed', value: 180, stack: 1,
   bed: { tier: 2, heal: 1.0, ambush: 0 }, desc: 'Dos plazas. Necesaria para casarte.' });
 R('bed_wood', 1, [{ id: 'wood', n: 8 }, { id: 'cloth', n: 4 }, { id: 'rope', n: 2 }], 'workbench',
-  { req: { lv: 6, skill: { artisan: 2 } }, xp: 16, saber: CR2 });
+  { req: { lv: 6, skill: { artisan: 2 } }, xp: 16, saber: CF });
 I('bed_feather', { name: 'Cama de plumas', cat: 'bed', value: 420, stack: 1,
   bed: { tier: 3, heal: 1.0, ambush: 0, bonusSt: 20 }, desc: 'Despiertas con energía extra.' });
 R('bed_feather', 1, [{ id: 'wood', n: 8 }, { id: 'feather', n: 12 }, { id: 'linen', n: 4 }], 'workbench',
-  { req: { lv: 10, skill: { artisan: 4 } }, xp: 22, saber: CR2 });
+  { req: { lv: 10, skill: { artisan: 4 } }, xp: 22, saber: CF });
 I('bed_noble', { name: 'Lecho noble', cat: 'bed', value: 1100, stack: 1,
   bed: { tier: 4, heal: 1.0, ambush: 0, bonusSt: 40, bonusHp: 30 },
   desc: 'Dosel de seda. Despiertas curado y con vigor de sobra.' });
@@ -747,7 +721,7 @@ R('bed_noble', 1, [{ id: 'wood', n: 10 }, { id: 'silk', n: 6 }, { id: 'pegasus_f
   'workbench', { req: { lv: 31, skill: { artisan: 8 } }, xp: 34, saber: MA });
 
 /* ==========================================================
-18 · FERTILIZANTES, PIENSOS Y VARIOS
+18 · FERTILIZANTES, PIENSOS, SEÑUELOS DE DOMA Y VARIOS
 ========================================================== */
 I('fert_manure', { name: 'Estiércol', cat: 'fert', value: 3, fert: { growth: 1.2, q: [85, 15, 0, 0] }, desc: 'Fertilizante básico.' });
 R('fert_manure', 1, [{ id: 'manure', n: 1 }], 'hand', { req: null, xp: 3 });
@@ -772,40 +746,48 @@ I('feed_golden', { name: 'Pienso dorado', cat: 'feed', value: 24, feed: { q: [10
   desc: 'Calabaza, miel y maca. Productos de tres estrellas.' });
 R('feed_golden', 2, [{ id: 'hay', n: 2 }, { id: 'crop_pumpkin', n: 1 }, { id: 'honey', n: 1 }], 'kitchen',
   { req: { lv: 9, skill: { artisan: 3 } }, fuel: 1, xp: 14, saber: FD });
+/* --- SEÑUELOS DE DOMA (v5): valen para cualquier especie de su dieta --- */
+I('feed_tame', { name: 'Pienso de doma', cat: 'feed', value: 12,
+  feed: { q: [60, 30, 10, 0] }, tame: { universal: 'plant' },
+  desc: 'Mezcla dulce de heno, bayas y hierbas. Sirve para tamear CUALQUIER herbívoro u omnívoro, aunque no sea su comida favorita.' });
+R('feed_tame', 3, [{ id: 'hay', n: 2 }, { id: 'berry', n: 1 }, { tag: 'herbany', n: 1 }], 'hand', { req: null, xp: 5 });
+I('meat_lure', { name: 'Señuelo de carne', cat: 'feed', value: 16,
+  feed: { q: [60, 30, 10, 0] }, tame: { universal: 'meat' },
+  desc: 'Carne curada con hueso y sal. Sirve para tamear CUALQUIER carnívoro o carroñero, aunque no sea su presa habitual.' });
+R('meat_lure', 3, [{ id: 'raw_meat', n: 1 }, { id: 'bone', n: 1 }, { id: 'salt', n: 1 }], 'campfire', { req: null, fuel: 1, xp: 6 });
 I('bait', { name: 'Cebo', cat: 'misc', value: 2, desc: 'Amplía la ventana de pesca.' });
 R('bait', 3, [{ id: 'fiber', n: 1 }, { id: 'berry', n: 1 }], 'hand', { req: null, xp: 3 });
 I('fishing_net', { name: 'Red de pesca', cat: 'misc', value: 90, desc: 'Captura 2–3 peces de una vez.' });
 R('fishing_net', 1, [{ id: 'thread', n: 6 }, { id: 'rope', n: 2 }], 'workbench',
-  { req: { lv: 7, skill: { artisan: 2 } }, xp: 14, saber: CR2 });
+  { req: { lv: 7, skill: { artisan: 2 } }, xp: 14, saber: CF });
 I('dart_narcotic', { name: 'Dardo narcótico', cat: 'misc', value: 18,
-  desc: 'Duerme a una criatura debilitada para poder alimentarla y tamearla.' });
+  desc: 'Duerme a una criatura debilitada (bajo el 60 % de vida) para poder alimentarla y tamearla.' });
 R('dart_narcotic', 3, [{ tag: 'herbany', n: 3 }, { id: 'bone', n: 1 }, { id: 'thread', n: 1 }], 'alchemy',
   { req: { lv: 8, skill: { beast: 5, artisan: 3 } }, fuel: 1, xp: 14 });
 I('dart_poison', { name: 'Dardo venenoso', cat: 'misc', value: 22, desc: 'Envenena a distancia sin gastar flechas.' });
 R('dart_poison', 3, [{ id: 'venom_sac', n: 1 }, { id: 'bone', n: 2 }], 'alchemy',
   { req: { lv: 9, skill: { artisan: 3 } }, fuel: 1, xp: 14 });
 I('lockpick', { name: 'Ganzúa', cat: 'misc', value: 40, desc: 'Abre cofres ajenos. Que no te vean.' });
-R('lockpick', 1, [{ id: 'iron_bar', n: 1 }, { id: 'flint', n: 1 }], 'workbench', { req: { lv: 6 }, xp: 10, saber: CR2 });
+R('lockpick', 1, [{ id: 'iron_bar', n: 1 }, { id: 'flint', n: 1 }], 'workbench', { req: { lv: 6 }, xp: 10, saber: CF });
 I('land_deed', { name: 'Escritura de tierras', cat: 'misc', value: B.LAND_DEED_COST,
   desc: 'Documento del Mercader Supremo. Necesario para comprar una parcela.' });
 R('land_deed', 1, [{ id: 'linen', n: 1 }, { id: 'gold_bar', n: 1 }], 'workbench',
-  { req: { lv: 5, skill: { artisan: 2 } }, xp: 12, saber: CR2 });
-/* Cofres colocables desde la mochila */
+  { req: { lv: 5, skill: { artisan: 2 } }, xp: 12, saber: CF });
 I('chest_kit', { name: 'Cofre desmontado', cat: 'misc', value: 60, stack: 1, place: 'chest',
   desc: 'Colócalo en tu parcela: 20 espacios de almacén.' });
-R('chest_kit', 1, [{ id: 'wood', n: 10 }, { id: 'iron_bar', n: 1 }], 'workbench', { req: { lv: 3 }, xp: 10, saber: CR2 });
+R('chest_kit', 1, [{ id: 'wood', n: 10 }, { id: 'iron_bar', n: 1 }], 'workbench', { req: { lv: 3 }, xp: 10, saber: CF });
 I('chest_large', { name: 'Arcón herrado', cat: 'misc', value: 260, stack: 1, place: 'chest_large',
   desc: 'Colócalo en tu parcela: 48 espacios de almacén.' });
 R('chest_large', 1, [{ id: 'wood', n: 20 }, { id: 'iron_bar', n: 4 }, { id: 'hard_leather', n: 2 }], 'workbench',
-  { req: { lv: 6, skill: { artisan: 2 } }, xp: 16, saber: CR2 });
+  { req: { lv: 6, skill: { artisan: 2 } }, xp: 16, saber: CF });
 
 /* ==========================================================
-19 · ACCESORIOS · Tier 2 (saber) y Tier 3 (maestría)
+19 · ACCESORIOS
 ========================================================== */
 const ACCS = [
   ['ring_gold', 'Anillo de oro', 'ring', 150, {}, 'Necesario para pedir matrimonio (×2).', 'forge', ['gold_bar', 1, 'iron_bar', 1], 6, 2, SM],
-  ['belt_leather', 'Cinturón de cuero', 'belt', 90, { st: 15 }, '+15 de stamina máxima.', 'workbench', ['hard_leather', 3, 'iron_bar', 1], 6, 2, CR2],
-  ['gloves_grip', 'Guantes de agarre', 'charm', 520, { draw: -0.15, melee: 0.06 }, 'Tensa un 15 % más rápido y +6 % de daño.', 'workbench', ['hard_leather', 3, 'manticore_spine', 1, 'thread', 3], 10, 4, CR2],
+  ['belt_leather', 'Cinturón de cuero', 'belt', 90, { st: 15 }, '+15 de stamina máxima.', 'workbench', ['hard_leather', 3, 'iron_bar', 1], 6, 2, CF],
+  ['gloves_grip', 'Guantes de agarre', 'charm', 520, { draw: -0.15, melee: 0.06 }, 'Tensa un 15 % más rápido y +6 % de daño.', 'workbench', ['hard_leather', 3, 'manticore_spine', 1, 'thread', 3], 10, 4, CF],
   ['charm_luck', 'Talismán de Fortuna', 'charm', 700, { luck: 0.10 }, '+10 % de botín raro.', 'alchemy', ['crystal', 3, 'gold_bar', 1, 'wisp_essence', 2], 11, 4, AL],
   ['ring_silver', 'Anillo de mithril', 'ring', 420, { crit: 0.06 }, '+6 % de crítico.', 'forge', ['mithril_bar', 1, 'crystal', 1], 12, 4, SM],
   ['charm_beast', 'Talismán de Afinidad', 'charm', 820, { tame: 0.2, petDmg: 0.15 }, 'Tameo un 20 % más rápido y compañeros más fuertes.', 'alchemy', ['unicorn_hair', 1, 'kirin_horn', 1, 'herb_blue', 3], 13, 6, AL],
@@ -824,20 +806,20 @@ ACCS.forEach(function (a) {
 });
 
 /* ==========================================================
-20 · LEGENDARIOS DE JEFE · TIER 3 (nivel 31+)
+20 · LEGENDARIOS DE JEFE · TIER 3
 ========================================================== */
 I('venom_spear', { name: 'Lanza Venenosa', cat: 'legendary', value: 2200, stack: 1,
-  weapon: { kind: 'spear', dmg: 34, dur: 500, reach: B.SPEAR_REACH, speed: 0.9, poison: 4 },
+  weapon: { kind: 'spear', dmg: 34, dur: 520, reach: B.SPEAR_REACH, speed: 0.9, poison: 4 },
   repair: { steel_bar: 1, venom_sac: 1 }, desc: 'Daño 34 y veneno persistente.' });
 R('venom_spear', 1, [{ id: 'hydra_fang', n: 1 }, { id: 'venom_sac', n: 3 }, { id: 'steel_bar', n: 3 }, { id: 'wood', n: 4 }],
   'forge', { req: { lv: 31, skill: { might: 7, artisan: 7 } }, fuel: 3, xp: 40, saber: MA });
 I('jotun_shield', { name: 'Muro de Escarcha', cat: 'legendary', value: 3600, stack: 1,
-  shield: { kind: 'tower', def: 26, dur: 620, reduce: 0.92, parry: 0.2, arc: 2.6, weight: 1.7, bash: 1.8, ward: true },
+  shield: { kind: 'tower', def: 26, dur: 640, reduce: 0.92, parry: 0.2, arc: 2.6, weight: 1.7, bash: 1.8, ward: true },
   repair: { adamantite_bar: 1, jotun_ice: 1 }, desc: 'Bloquea el 92 % y devuelve el frío a quien golpea.' });
 R('jotun_shield', 1, [{ id: 'jotun_crown', n: 1 }, { id: 'jotun_ice', n: 2 }, { id: 'adamantite_bar', n: 3 }, { id: 'golem_core', n: 1 }],
   'forge', { req: { lv: 32, skill: { guard: 9, artisan: 8 } }, fuel: 3, xp: 55, saber: MA });
 I('fenrir_bow', { name: 'Arco de Fenrir', cat: 'legendary', value: 3800, stack: 1,
-  weapon: { kind: 'bow', dmg: 44, draw: 0.55, dur: 620, reach: B.AIM_MAX_RANGE + 3, speed: 1.2, ammo: 'arrow', pierce: 2 },
+  weapon: { kind: 'bow', dmg: 44, draw: 0.55, dur: 640, reach: B.AIM_MAX_RANGE + 3, speed: 1.2, ammo: 'arrow', pierce: 2 },
   repair: { mithril_bar: 1, silk: 1 }, desc: 'Tensa casi al instante y atraviesa dos enemigos.' });
 R('fenrir_bow', 1, [{ id: 'fenrir_chain', n: 1 }, { id: 'fenrir_pelt', n: 1 }, { id: 'unicorn_hair', n: 2 }, { id: 'mithril_bar', n: 3 }],
   'workbench', { req: { lv: 33, skill: { marks: 9, artisan: 8 } }, xp: 55, saber: MA });
@@ -846,7 +828,7 @@ I('basilisk_gaze', { name: 'Mirada del Basilisco', cat: 'legendary', value: 3200
 R('basilisk_gaze', 1, [{ id: 'basilisk_crown', n: 1 }, { id: 'basilisk_eye', n: 2 }, { id: 'crystal', n: 3 }, { id: 'gold_bar', n: 2 }],
   'alchemy', { req: { lv: 31, skill: { artisan: 8 } }, fuel: 2, xp: 50, saber: MA });
 I('dragonblade', { name: 'Filo de Dragón', cat: 'legendary', value: 4200, stack: 1,
-  weapon: { kind: 'sword', dmg: 58, dur: 700, reach: B.REACH * 1.1, speed: 1.05, burn: 6, guardBreak: 0.8 },
+  weapon: { kind: 'sword', dmg: 58, dur: 720, reach: B.REACH * 1.1, speed: 1.05, burn: 6, guardBreak: 0.8 },
   repair: { adamantite_bar: 1, dragon_scale: 1 }, desc: 'Daño 58, arde al cortar y rompe guardias.' });
 R('dragonblade', 1, [{ id: 'dragon_heart', n: 1 }, { id: 'dragon_scale', n: 3 }, { id: 'adamantite_bar', n: 4 }, { id: 'obsidian_bar', n: 2 }],
   'forge', { req: { lv: 34, skill: { might: 9, artisan: 9 } }, fuel: 4, xp: 60, saber: MA });
@@ -863,19 +845,21 @@ R('dragonblade', 1, [{ id: 'dragon_heart', n: 1 }, { id: 'dragon_scale', n: 3 },
 });
 
 /* ==========================================================
-22 · RESUMEN POR TIER Y SABER
+22 · RESUMEN
 ========================================================== */
-const byTier = [0, 0, 0, 0], bySaber = Object.create(null);
+const byTier = [0, 0, 0, 0], bySaber = Object.create(null), stations = Object.create(null);
 let free = 0;
 D.RECIPES.forEach(function (r) {
   byTier[r.tier] = (byTier[r.tier] || 0) + 1;
+  stations[r.station] = (stations[r.station] || 0) + 1;
   if (r.saber) bySaber[r.saber] = (bySaber[r.saber] || 0) + 1; else free++;
 });
-const stations = Object.create(null);
-D.RECIPES.forEach(function (r) { stations[r.station] = (stations[r.station] || 0) + 1; });
-console.info('[CR] data-items.js v4 listo · ' + Object.keys(D.ITEMS).length + ' objetos · ' + D.RECIPES.length + ' recetas');
-console.info('[CR] recetas por estación · ' + D.STATIONS.map(function (s) { return s + ':' + (stations[s] || 0); }).join(' · '));
-console.info('[CR] recetas por tier · T1:' + (byTier[1] || 0) + ' T2:' + (byTier[2] || 0) + ' T3:' + (byTier[3] || 0) +
-  ' · gratis a mano/estación: ' + free);
-console.info('[CR] recetas por saber · ' + D.SABERS.map(function (s) { return s.name + ':' + (bySaber[s.id] || 0); }).join(' · '));
+const repCount = Object.keys(D.ITEMS).filter(function (k) { return !!D.ITEMS[k].repair; }).length;
+console.info('[CR] data-items.js v5 · ' + Object.keys(D.ITEMS).length + ' objetos · ' + D.RECIPES.length +
+  ' recetas · ' + repCount + ' objetos reparables · señuelos de doma incluidos');
+console.info('[CR] estaciones · ' + D.STATIONS.map(function (s) { return s + ':' + (stations[s] || 0); }).join(' · '));
+console.info('[CR] tiers · T1:' + (byTier[1] || 0) + ' T2:' + (byTier[2] || 0) + ' T3:' + (byTier[3] || 0) + ' · gratis: ' + free);
+console.info('[CR] velocidad de herramienta · ' + TIERS.map(function (t) {
+  return t.id + ' ' + t.speed.toFixed(2) + '×/' + t.dur + 'u';
+}).join(' · '));
 })();

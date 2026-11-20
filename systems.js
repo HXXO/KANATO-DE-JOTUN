@@ -1,22 +1,6 @@
 /* ============================================================
-KANATO DE JOTUN · systems.js — Sistemas v4
-ARCHIVO EN 2 PARTES CONCATENABLES: 6A · 6B
-6A abre el IIFE; 6B lo cierra. No insertes nada entre ellas.
-
-CAMBIOS v4:
-· MERCADO PÚBLICO (mejora 2): el horno y la mesa de la plaza
-  funcionan desde el minuto 1, sin parcela ni nivel. Contrapartida:
-  enfriamiento entre usos, +1 de combustible y nunca salen piezas
-  de calidad. W.stationSource() dice si es tuya / mercader / pública.
-· MENOS MESAS (mejora 3): todo se cocina/funda/forja/teje en las
-  6 estaciones reales; las recetas ya vienen remapeadas de data.
-· TIERS Y SABERES (mejora 4): las recetas se agrupan en 6 saberes
-  que se aprenden con puntos de receta (1 por nivel). El Tier
-  (1-10 / 11-30 / 31-40) limita qué puedes fabricar y aprender.
-· REPARACIÓN (mejora 6): las herramientas rotas NO se borran;
-  el inventario ofrece repararlas barato (E.repairInvSlot/Equip).
-· Talleres públicos interaccionables: acercarte y usarlos abre el
-  panel de crafteo directamente.
+KANATO DE JOTUN · systems.js v5 — Sistemas (PARTE 1/3)
+Concatenar: Parte 1 + Parte 2 + Parte 3 en un solo systems.js.
 ============================================================ */
 (function () {
 'use strict';
@@ -24,7 +8,6 @@ const CR = window.CR;
 if (!CR || !CR.DATA || !CR.World || !CR.Ent) { console.error('[CR] systems.js requiere core, data, world y entities'); return; }
 const U = CR.util, C = CR.CONFIG, D = CR.DATA, B = D.BAL, W = CR.World, E = CR.Ent, A = CR.Audio, Bus = CR.Bus;
 
-/* ---------- Reloj global ---------- */
 const Time = CR.Time = { day: 1, month: 1, hour: 6, minute: 0, min: 360, weather: 'clear', rain: 0, wind: 0.3, night: 0 };
 
 const S = CR.Sys = {
@@ -35,20 +18,44 @@ const S = CR.Sys = {
   slaveStock: 0, workerMorale: {},
   dialog: null, panel: null, fishing: null,
   uiMode: 'none', _autosave: 0, _lastBackup: 0, _started: false,
-  publicCd: {}                       /* v4: enfriamiento por estación pública */
+  publicCd: {}
 };
 
-function toast(m, c) { Bus.emit('toast', { msg: m, cls: c || '' }); }
+/* ---------- Avisos no invasivos ---------- */
+const _seen = Object.create(null);
+let _lastToast = -1e9, _lastTick = -1e9;
+const TOAST_GAP = 420, TICK_GAP = 140, DEDUPE_MS = 2600;
+
+function fresh(msg, win) {
+  const now = U.now(), prev = _seen[msg];
+  if (prev !== undefined && now - prev < win) return false;
+  _seen[msg] = now;
+  let n = 0; for (const k in _seen) n++;
+  if (n > 220) { for (const k in _seen) if (now - _seen[k] > DEDUPE_MS * 2) delete _seen[k]; }
+  return true;
+}
+function tick(msg, cls) {
+  if (!msg) return;
+  const now = U.now();
+  if (now - _lastTick < TICK_GAP) return;
+  if (!fresh(msg, 1200)) return;
+  _lastTick = now;
+  Bus.emit('ticker', { msg: msg, cls: cls || '' });
+}
+function toast(msg, cls) {
+  if (!msg) return;
+  const now = U.now();
+  if (!fresh(msg, DEDUPE_MS)) return;
+  if (now - _lastToast < TOAST_GAP) { Bus.emit('ticker', { msg: msg, cls: cls || '' }); _lastTick = now; return; }
+  _lastToast = now;
+  Bus.emit('toast', { msg: msg, cls: cls || '' });
+}
+S.toast = toast; S.tick = tick;
 function fx(k, x, y, ex) { Bus.emit('fx', { kind: k, x: x, y: y, extra: ex || null }); }
 function floater(x, y, t, c) { Bus.emit('floater', { x: x, y: y, text: t, color: c || '#fff' }); }
 function shakeSafe(a) { Bus.emit('shake', { amt: a }); }
 function player() { return E.player; }
-/** Jugador con el estado de progresión v4 normalizado (saberes/recetas). */
-function P() {
-  const p = E.player;
-  if (p) ensureProg(p);
-  return p;
-}
+function P() { const p = E.player; if (p) ensureProg(p); return p; }
 function ensureProg(p) {
   if (!p.lvl) p.lvl = { xp: 0, level: 1, points: 0, alloc: {} };
   if (!p.lvl.known) p.lvl.known = {};
@@ -59,9 +66,14 @@ function rng() { return CR.streams ? CR.streams.ai : CR.RNG(7); }
 function lootRng() { return CR.streams ? CR.streams.loot : CR.RNG(3); }
 function stationName(s) { return D.STATION_INFO[s] ? D.STATION_INFO[s].name : s; }
 S.stationName = stationName;
+function maxDurOf(def) {
+  if (E.maxDurOf) return E.maxDurOf(def);
+  if (!def) return 0;
+  return def.tool ? def.tool.dur : (def.weapon ? def.weapon.dur : (def.shield ? def.shield.dur : 0));
+}
 
 /* ==========================================================
-1 · CONFIANZA Y CONDICIONES
+1 · CONFIANZA
 ========================================================== */
 function trustOf(id) { return S.trust[id] === undefined ? 0 : S.trust[id]; }
 function bandOf(v) {
@@ -120,7 +132,7 @@ function condOk(when, npcId) {
 }
 
 /* ==========================================================
-2 · INVENTARIO, COSTES Y PUERTA DE INPUT
+2 · INVENTARIO Y COSTES
 ========================================================== */
 function emptyCount(p) { let n = 0; for (let i = 0; i < p.inv.length; i++) if (!p.inv[i]) n++; return n; }
 function canFit(id, n) {
@@ -145,7 +157,7 @@ function costText(cost) {
 S.costText = costText;
 function gateInput() {
   if (CR.UI && typeof CR.UI.syncInput === 'function') { CR.UI.syncInput(); return; }
-  CR.Input.enabled = !!(player() && !player().ko && S.uiMode === 'none' && !S.fishing);
+  CR.Input.enabled = !!(player() && !player().ko && S.uiMode === 'none');
 }
 function openPanel(type, data) {
   S.panel = { type: type, data: data || {} };
@@ -182,6 +194,10 @@ S.init = function () {
   Bus.on('net:request', function () { S.useNet(); }, 'sys');
   Bus.on('input:press', function (a) { if (S.fishing && (a === 'attack' || a === 'interact')) S.fishingPress(); }, 'sys');
   Bus.on('livestock:feed', function (d) { S.helpProgress('feed', d.x, d.y, 1); }, 'sys');
+  Bus.on('gather', function (d) {
+    if (!d || !d.amount) return;
+    tick(d.def.name + ' · +' + d.amount, 'good');
+  }, 'sys');
 };
 S.newGame = function (name, gender, seed) {
   S.trust = {}; S.rel = {}; S.flags = {}; S.daily = {};
@@ -201,18 +217,11 @@ S.newGame = function (name, gender, seed) {
   E.day = 1;
   S.slaveStock = W.title().slaves;
   gateInput();
-  const intro = [
-    'Bienvenido a Vhalor. Debes 2.000 de oro a Bareth. Solo tienes pico y hacha de piedra.',
-    'En la plaza hay un HORNO PÚBLICO y una MESA PÚBLICA: úsalos sin construir nada (tardan en enfriarse).',
-    'Si una herramienta se rompe NO la tires: selecciónala en el inventario y repárala barato.',
-    'Cada nivel da 1 punto de habilidad (H) y 1 punto de receta (J): con él aprendes un saber nuevo.',
-    'Las recetas son Tier 1 (nv 1-10), Tier 2 (11-30) y Tier 3 (31-40). Tu tier limita lo que fabricas.'
-  ];
-  intro.forEach(function (msg, i) { setTimeout(function () { toast(msg, ''); }, 2600 + i * 6000); });
+  toast('Solo tienes pico y hacha. En la plaza hay horno y mesa públicos, y Nadia vende arcos.', 'gold');
 };
 
 /* ==========================================================
-4 · TIEMPO, CLIMA Y CICLO DIARIO
+4 · TIEMPO Y CICLO DIARIO
 ========================================================== */
 S.update = function (dt) {
   const p = player();
@@ -228,9 +237,7 @@ S.update = function (dt) {
   Time.night = h < 5.5 ? 1 : h < 7 ? (7 - h) / 1.5 : h < 19 ? 0 : h < 21 ? (h - 19) / 2 : 1;
   Time.night = U.clamp(Time.night, 0, 1);
   if (S.fishing) S.updateFishing(dt);
-  /* v4: enfría los talleres públicos */
   for (const k in S.publicCd) if (S.publicCd[k] > 0) S.publicCd[k] = Math.max(0, S.publicCd[k] - dt);
-  /* Tarea de ayuda caducada */
   if (S.help && Time.day > S.help.deadline) {
     toast('La tarea de ' + D.NPCS[S.help.npcId].name + ' ha caducado.', 'bad');
     addTrust(S.help.npcId, -4);
@@ -252,12 +259,10 @@ S.onDay = function () {
   else if (r.chance(0.2)) { Time.weather = 'wind'; Time.rain = 0; Time.wind = r.range(0.6, 1); }
   else { Time.weather = 'clear'; Time.rain = 0; Time.wind = r.range(0.15, 0.45); }
   if (!p) return;
-  /* Banco */
   if (p.bank > 0 && !S.flags.bankFrozen) {
     const interest = Math.min(B.BANK_CAP, Math.floor(p.bank * B.BANK_RATE));
-    if (interest > 0) { p.bank += interest; toast('Interés del banco: +' + interest + ' oro.', 'gold'); }
+    if (interest > 0) { p.bank += interest; tick('Interés del banco: +' + interest + ' oro', 'gold'); }
   }
-  /* Cultivos */
   W.soil.forEach(function (s) {
     if (!s.crop) return;
     const cd = D.CROPS[s.crop];
@@ -269,8 +274,8 @@ S.onDay = function () {
     s.growth = Math.min(1, s.growth + rate);
     s.watered = false;
   });
-  /* Trabajadores: comida y moral */
   const foods = ['bread', 'flatbread', 'cooked_meat', 'cooked_fish', 'stew', 'porridge', 'dried_meat', 'berry', 'apple', 'crop_wheat'];
+  let hungry = 0;
   for (let i = 0; i < E.list.length; i++) {
     const e = E.list[i];
     if (e.type !== 'worker' || e.tg.dead) continue;
@@ -281,9 +286,9 @@ S.onDay = function () {
     m = U.clamp(m + (fed ? 10 : -25), 0, 100);
     S.workerMorale[e.id] = m;
     if (m <= 0 && !e.tg.child) { e.tg.dead = true; toast(e.name + ' ha huido por hambre.', 'bad'); }
-    else if (m < 30) toast(e.name + ' está descontento (moral ' + m + ').', 'bad');
+    else if (m < 30) hungry++;
   }
-  /* Familia */
+  if (hungry) tick(hungry + ' trabajador(es) descontentos por falta de comida', 'bad');
   S.growChildren();
   if (S.family.spouse && !S.family.pregnantDay) {
     const house = W.bestHouse();
@@ -294,16 +299,16 @@ S.onDay = function () {
     }
   }
   if (S.family.pregnantDay && Time.day >= S.family.pregnantDay) S.birthChild();
-  if (monthChanged) { S.slaveStock = W.title().slaves; toast('Nuevo mes: ' + S.slaveStock + ' trabajadores disponibles.', 'gold'); }
+  if (monthChanged) { S.slaveStock = W.title().slaves; tick('Nuevo mes: ' + S.slaveStock + ' trabajadores disponibles', 'gold'); }
   S.daily = {};
   E.onDay(Time.day);
   S.save(true);
   Bus.emit('day', { day: Time.day, month: Time.month });
-  toast('Día ' + Time.day + ' · Mes ' + Time.month, 'gold');
+  tick('Día ' + Time.day + ' · Mes ' + Time.month, 'gold');
 };
 
 /* ==========================================================
-5 · DORMIR · petate / posada / cama propia
+5 · DORMIR
 ========================================================== */
 S.sleepOptions = function () {
   const p = player();
@@ -314,7 +319,7 @@ S.sleepOptions = function () {
     mode: 'roll', name: 'Petate enrollado', ok: roll,
     heal: B.SLEEP_OUTDOOR_HEAL, cost: 0, risk: B.SLEEP_OUTDOOR_AMBUSH,
     desc: roll ? 'Duermes donde estés. Recuperas el 72 % y hay un 34 % de emboscada.'
-      : 'Necesitas un petate: se hace A MANO con paja, fibra y cuerda.'
+      : 'Se hace A MANO con paja, fibra y cuerda. No necesitas mesa.'
   });
   const inn = nearInn();
   out.push({
@@ -331,7 +336,7 @@ S.sleepOptions = function () {
     bonusSt: bd && bd.bed ? (bd.bed.bonusSt || 0) : 0,
     bonusHp: bd && bd.bed ? (bd.bed.bonusHp || 0) : 0,
     desc: bed ? 'Descanso completo sin riesgo.' + (bd && bd.bed && bd.bed.bonusSt ? ' Despiertas con vigor extra.' : '')
-      : 'Coloca una cama en tu parcela (banco de trabajo).'
+      : 'Coloca una cama en tu parcela.'
   });
   return out;
 };
@@ -379,9 +384,9 @@ S.sleep = function (mode) {
   if (o.bonusHp) p.st.hp = Math.min(p.st.maxHp, p.st.hp + o.bonusHp);
   if (mode === 'inn') {
     p.st.hp = Math.max(1, Math.round(p.st.hp * (1 - B.SLEEP_MARKET_HP_CUT)));
-    toast('Has dormido en la posada. Cama ajena: despiertas algo mermado.', 'good');
+    tick('Has dormido en la posada. Despiertas algo mermado.', 'good');
   } else if (mode === 'bed') {
-    toast('Has dormido en tu cama hasta el alba.', 'good');
+    tick('Has dormido en tu cama hasta el alba.', 'good');
   } else {
     if (rng().chance(o.risk)) {
       const spot = E.freeSpotNear(p.t.x, p.t.y, 4);
@@ -391,12 +396,10 @@ S.sleep = function (mode) {
         if (b) { b.tg.hostile = true; b.ai.target = p; b.ai.state = 'chase'; }
       }
       p.st.hp = Math.max(1, p.st.hp - Math.round(p.st.maxHp * 0.12));
-      shakeSafe(8);
-      A.play('hurt');
+      shakeSafe(8); A.play('hurt');
       Bus.emit('banner', { title: '¡EMBOSCADA!', sub: 'Alguien te ha visto dormir al raso.' });
-      toast('Te han asaltado mientras dormías. Pierdes algo de vida.', 'bad');
     } else {
-      toast('Has dormido al raso. Nadie te ha molestado… esta vez.', 'good');
+      tick('Has dormido al raso. Nadie te ha molestado… esta vez.', 'good');
     }
   }
   E.recalc(p);
@@ -487,12 +490,10 @@ S.doAct = function (act, npcId) {
     case 'wedding': S.closeDialog(); S.wedding(); break;
     case 'propose': S.closeDialog(); S.propose(npcId); break;
     case 'quest': S.closeDialog(); openPanel('quest', {}); break;
-    case 'land': S.closeDialog(); openPanel('parcelList', {}); break;
-    case 'parcel': S.closeDialog(); openPanel('parcelList', {}); break;
+    case 'land': case 'parcel': S.closeDialog(); openPanel('parcelList', {}); break;
     case 'slaves': S.closeDialog(); openPanel('slaves', {}); break;
-    case 'repair': S.closeDialog(); S.repair(); break;
-    case 'help_task': S.closeDialog(); openPanel('helpTask', { npcId: npcId }); break;
-    case 'help_farm': S.closeDialog(); openPanel('helpTask', { npcId: npcId }); break;
+    case 'repair': S.closeDialog(); S.repair(npcId); break;
+    case 'help_task': case 'help_farm': S.closeDialog(); openPanel('helpTask', { npcId: npcId }); break;
     case 'stations': S.closeDialog(); openPanel('stations', { npcId: npcId }); break;
     case 'bed_market': S.closeDialog(); S.sleep('inn'); break;
     case 'family': S.closeDialog(); openPanel('family', {}); break;
@@ -535,9 +536,11 @@ function stallSellPrice(id, q) { return Math.max(1, Math.round(D.ITEMS[id].value
 function stallView() {
   const ST = D.STALL, p = player();
   const items = ST.sells.map(function (id) {
-    const def = D.ITEMS[id], price = stallBuyPrice(id);
+    const def = D.ITEMS[id];
+    if (!def) return null;
+    const price = stallBuyPrice(id);
     return { id: id, name: def.name, price: price, canBuy: p.gold >= price && canFit(id, 1), desc: def.desc };
-  });
+  }).filter(Boolean);
   const sell = [];
   for (let i = 0; i < p.inv.length; i++) {
     const s = p.inv[i];
@@ -550,7 +553,7 @@ S.shopView = function () {
   if (!S.panel || S.panel.type !== 'shop') return null;
   if (S.panel.data.stall) return stallView();
   const npcId = S.panel.data.npcId, nd = D.NPCS[npcId], p = player();
-  if (!nd) return null;
+  if (!nd) return stallView();
   const sells = (nd.shop && nd.shop.sells) || [];
   const items = sells.map(function (id) {
     const def = D.ITEMS[id];
@@ -566,7 +569,11 @@ S.shopView = function () {
     if (!def || !wantsItem(nd, def)) continue;
     sell.push({ slot: i, id: s.id, name: def.name, n: s.n, q: s.q | 0, price: sellPrice(s.id, s.q | 0, npcId) });
   }
-  return { npcId: npcId, name: nd.name, gold: p.gold, open: shopOpen(npcId), items: items, sell: sell, buys: (nd.shop && nd.shop.buys) || [] };
+  return {
+    npcId: npcId, name: nd.name, role: nd.role, gold: p.gold, open: shopOpen(npcId),
+    items: items, sell: sell, buys: (nd.shop && nd.shop.buys) || [],
+    trust: trustOf(npcId), band: bandOf(trustOf(npcId))
+  };
 };
 S.buy = function (id, n) {
   if (!S.panel || S.panel.type !== 'shop') return;
@@ -582,7 +589,7 @@ S.buy = function (id, n) {
   E.Inv.add(p, id, n, 0);
   E.autoAmmo(p);
   A.play('buy');
-  toast('Comprado: ' + D.ITEMS[id].name + ' ×' + n, 'good');
+  tick('Comprado: ' + D.ITEMS[id].name + ' ×' + n + ' · −' + price + ' oro', 'good');
   Bus.emit('panel:update', {});
 };
 S.sellSlot = function (slot, n) {
@@ -601,11 +608,12 @@ S.sellSlot = function (slot, n) {
   p.gold += price;
   A.play('sell');
   floater(p.t.x, p.t.y - 0.8, '+' + price + ' oro', '#f3cf7a');
-  toast('Vendido: ' + def.name + ' ×' + n + ' por ' + price + ' oro.', 'gold');
+  tick('Vendido: ' + def.name + ' ×' + n + ' · +' + price + ' oro', 'gold');
   Bus.emit('panel:update', {});
 };
-S.repair = function () {
+S.repair = function (npcId) {
   const p = player();
+  const who = npcId && D.NPCS[npcId] ? npcId : 'dorn';
   let cost = 0;
   const slots = ['weapon', 'tool', 'shield'];
   for (let i = 0; i < slots.length; i++) {
@@ -613,22 +621,37 @@ S.repair = function () {
     if (!s || s.dur === undefined) continue;
     const def = D.ITEMS[s.id];
     if (!def) continue;
-    const max = E.maxDurOf(def);
-    cost += Math.max(0, max - s.dur) * B.REPAIR_COST_PER_DUR;
+    cost += Math.max(0, maxDurOf(def) - s.dur) * B.REPAIR_COST_PER_DUR;
   }
-  cost = Math.ceil(cost * (trustOf('dorn') >= 60 ? 0.5 : 1));
-  if (cost <= 0) { toast('Tu equipo está como nuevo.', 'good'); return; }
+  cost = Math.ceil(cost * (trustOf(who) >= 60 ? 0.5 : 1));
+  if (cost <= 0) { tick('Tu equipo está como nuevo.', 'good'); return; }
   if (p.gold < cost) { toast('La reparación cuesta ' + cost + ' oro.', 'bad'); A.play('error'); return; }
   p.gold -= cost;
   for (let i = 0; i < slots.length; i++) {
     const s = p.equip[slots[i]];
     if (!s || s.dur === undefined) continue;
-    const def = D.ITEMS[s.id];
-    s.dur = E.maxDurOf(def);
+    s.dur = maxDurOf(D.ITEMS[s.id]);
   }
   E.recalc(p);
   A.play('craft');
   toast('Equipo reparado por ' + cost + ' oro.', 'good');
+  Bus.emit('panel:update', {});
+};
+S.repairInv = function (slot) {
+  const p = player();
+  if (!E.repairInvSlot) { toast('Reparación no disponible.', 'bad'); return { ok: false }; }
+  const r = E.repairInvSlot(p, slot);
+  if (r.ok) tick(r.msg, 'good'); else toast(r.msg, 'bad');
+  Bus.emit('panel:update', {});
+  return r;
+};
+S.repairEquip = function (key) {
+  const p = player();
+  if (!E.repairEquip) { toast('Reparación no disponible.', 'bad'); return { ok: false }; }
+  const r = E.repairEquip(p, key);
+  if (r.ok) tick(r.msg, 'good'); else toast(r.msg, 'bad');
+  Bus.emit('panel:update', {});
+  return r;
 };
 
 /* ==========================================================
@@ -644,7 +667,7 @@ S.deposit = function (n) {
   n = Math.min(n | 0, p.gold);
   if (n <= 0) return;
   p.gold -= n; p.bank += n;
-  A.play('coin'); toast('Depositado ' + n + ' oro.', 'good');
+  A.play('coin'); tick('Depositado ' + n + ' oro', 'good');
   Bus.emit('panel:update', {});
 };
 S.withdraw = function (n) {
@@ -653,7 +676,7 @@ S.withdraw = function (n) {
   n = Math.min(n | 0, p.bank);
   if (n <= 0) return;
   p.bank -= n; p.gold += n;
-  A.play('coin'); toast('Retirado ' + n + ' oro.', 'good');
+  A.play('coin'); tick('Retirado ' + n + ' oro', 'good');
   Bus.emit('panel:update', {});
 };
 function debtCredit(id, q) {
@@ -675,7 +698,7 @@ S.debtView = function () {
 };
 S.payDebtItem = function (slot, n) {
   const p = player();
-  if (p.free) { toast('Ya eres libre.', 'good'); return; }
+  if (p.free) { tick('Ya eres libre.', 'good'); return; }
   const s = p.inv[slot];
   if (!s || !D.ITEMS[s.id]) return;
   const unit = debtCredit(s.id, s.q | 0);
@@ -688,19 +711,19 @@ S.payDebtItem = function (slot, n) {
   p.debt -= credit;
   A.play('coin');
   addTrust('bareth', Math.min(5, Math.ceil(credit / 200)));
-  toast('Entregaste ' + name + ' ×' + cnt + ': la deuda baja ' + credit + '. Quedan ' + p.debt + '.', 'gold');
+  tick(name + ' ×' + cnt + ' · deuda −' + credit + ' · quedan ' + p.debt, 'gold');
   if (p.debt <= 0) S.freedom();
   Bus.emit('panel:update', {});
 };
 S.payDebt = function (n) {
   const p = player();
-  if (p.free) { toast('Ya eres libre.', 'good'); return; }
+  if (p.free) { tick('Ya eres libre.', 'good'); return; }
   n = Math.min(n | 0, p.gold, p.debt);
   if (n <= 0) { toast('No tienes oro para pagar.', 'bad'); return; }
   p.gold -= n; p.debt -= n;
   A.play('coin');
   addTrust('bareth', Math.min(5, Math.ceil(n / 200)));
-  toast('Has pagado ' + n + ' de tu deuda. Quedan ' + p.debt + '.', 'gold');
+  tick('Has pagado ' + n + ' · quedan ' + p.debt + ' de deuda', 'gold');
   if (p.debt <= 0) S.freedom();
   Bus.emit('panel:update', {});
 };
@@ -717,7 +740,7 @@ S.freedom = function () {
 };
 
 /* ==========================================================
-9 · NIVEL, HABILIDADES Y SABERES (mejora 4)
+9 · NIVEL, HABILIDADES Y SABERES
 ========================================================== */
 S.skillsView = function () {
   const p = P();
@@ -745,15 +768,13 @@ S.skillsView = function () {
   return {
     level: lv, points: p.lvl.points, xp: Math.round(p.lvl.xp),
     nextXp: nxt, pct: pct, branches: branches, trades: trades,
-    maxLevel: B.LEVEL_XP.length,
-    respecCost: 25 * lv,
-    rp: p.lvl.rp || 0, tier: E.playerTier(p)
+    maxLevel: B.LEVEL_XP.length, respecCost: 25 * lv,
+    rp: p.lvl.rp || 0, tier: E.playerTier ? E.playerTier(p) : 1
   };
 };
 S.alloc = function (skillId) {
   const r = E.allocPoint(player(), skillId);
-  toast(r.msg, r.ok ? 'good' : 'bad');
-  if (!r.ok) A.play('error');
+  if (r.ok) tick(r.msg, 'good'); else toast(r.msg, 'bad');
   Bus.emit('panel:update', {});
   return r;
 };
@@ -766,11 +787,9 @@ S.respec = function () {
   toast(r.msg + ' (−' + cost + ' oro)', 'good');
   Bus.emit('panel:update', {});
 };
-/* ---------- Saberes: familias de recetas aprendibles ---------- */
 function saberKnown(p, id) { p.lvl.sabers = p.lvl.sabers || {}; return !!p.lvl.sabers[id]; }
-/** ¿Está una receta disponible? Tier + saber + flags de aprendizaje. */
 function recipeOk(p, r) {
-  const base = E.recipeUnlocked(p, r);
+  const base = E.recipeUnlocked ? E.recipeUnlocked(p, r) : { ok: true, why: '' };
   if (!base.ok) return base;
   if (r.saber && r.station !== 'hand' && !saberKnown(p, r.saber))
     return { ok: false, why: 'saber', saber: r.saber, tier: base.tier };
@@ -779,34 +798,38 @@ function recipeOk(p, r) {
 S.recipeOk = recipeOk;
 S.sabersView = function () {
   const p = P();
-  const tier = E.playerTier(p);
-  const list = D.SABERS.map(function (sb) {
+  const tier = E.playerTier ? E.playerTier(p) : 1;
+  const list = (D.SABERS || []).map(function (sb) {
     let total = 0, inTier = 0;
+    const samples = [];
     for (let i = 0; i < D.RECIPES.length; i++) {
       const r = D.RECIPES[i];
       if (r.saber !== sb.id) continue;
       total++;
-      if (E.recipeTier(r) <= tier) inTier++;
+      const rt = E.recipeTier ? E.recipeTier(r) : 1;
+      if (rt <= tier) { inTier++; if (samples.length < 5 && D.ITEMS[r.out.id]) samples.push(D.ITEMS[r.out.id].name); }
     }
     return {
       id: sb.id, name: sb.name, glyph: sb.glyph, desc: sb.desc, tier: sb.tier,
       learned: saberKnown(p, sb.id), tierOk: tier >= sb.tier,
-      recipes: total, inTier: inTier
+      recipes: total, inTier: inTier, samples: samples
     };
   });
   return {
     list: list, points: p.lvl.rp || 0, tier: tier, level: p.lvl.level,
-    bounds: B.TIER_BOUNDS,
+    bounds: B.TIER_BOUNDS || [10, 30, 40],
     learnedCount: Object.keys(p.lvl.sabers || {}).length
   };
 };
 S.learnSaber = function (id) {
   const p = P();
-  const sb = D.SABER_BY_ID[id];
+  const sb = D.SABER_BY_ID ? D.SABER_BY_ID[id] : null;
   if (!sb) return { ok: false, msg: 'Saber desconocido.' };
   if (saberKnown(p, id)) return { ok: false, msg: 'Ya conoces ' + sb.name + '.' };
-  if (E.playerTier(p) < sb.tier)
-    return { ok: false, msg: sb.name + ' es de Tier ' + sb.tier + ' (nivel ' + (sb.tier === 2 ? B.TIER_BOUNDS[0] + 1 : B.TIER_BOUNDS[1] + 1) + '+).' };
+  const tier = E.playerTier ? E.playerTier(p) : 1;
+  const bounds = B.TIER_BOUNDS || [10, 30, 40];
+  if (tier < sb.tier)
+    return { ok: false, msg: sb.name + ' es de Tier ' + sb.tier + ' (nivel ' + (sb.tier === 2 ? bounds[0] + 1 : bounds[1] + 1) + '+).' };
   if ((p.lvl.rp || 0) <= 0) return { ok: false, msg: 'Sin puntos de receta: sube de nivel.' };
   p.lvl.rp--;
   p.lvl.sabers[id] = 1;
@@ -817,10 +840,20 @@ S.learnSaber = function (id) {
   Bus.emit('panel:update', {});
   return { ok: true, msg: sb.name + ' aprendido.' };
 };
+S.tameGuideView = function () {
+  return {
+    rows: D.TAME_GUIDE || [],
+    tiers: D.TAME_GUIDE_SUMMARY || [],
+    methods: D.TAME_METHODS || {},
+    sedateHp: Math.round((B.TAME_SEDATE_HP || 0.6) * 100),
+    sedateTime: B.TAME_SEDATE_TIME || 42,
+    maxComp: B.TAME_MAX_COMPANIONS || 2,
+    maxCompSkill: B.TAME_MAX_WITH_SKILL || 4
+  };
+};
 
 /* ==========================================================
-10 · CRAFTEO v4 · estación + combustible + nivel + tier + saber
-     + talleres PÚBLICOS (lentos, sin calidad) y mercader
+10 · CRAFTEO
 ========================================================== */
 function fuelCost(r, p) {
   if (!r.fuel) return 0;
@@ -841,15 +874,19 @@ function publicInfoNear(p, station) {
   if (typeof W.publicInfo !== 'function') return null;
   return W.publicInfo(station, p.t.x, p.t.y, B.CRAFT_RADIUS);
 }
+function tagName(t) {
+  return { fish: 'Pescado', meat: 'Carne', grain: 'Grano', vegetable: 'Hortaliza', fruit: 'Fruta', fuel: 'Combustible', herbany: 'Hierba' }[t] || t;
+}
 S.craftView = function () {
   const p = P();
   const stations = W.stationsNear(p.t.x, p.t.y, B.CRAFT_RADIUS);
   const fuelHave = E.Inv.fuel(p);
-  /* Origen de cada estación: propia / mercader / pública */
   const src = {};
   for (let i = 0; i < D.STATIONS.length; i++) {
-    src[D.STATIONS[i]] = W.stationSource ? W.stationSource(D.STATIONS[i], p.t.x, p.t.y, B.CRAFT_RADIUS) : (stations[D.STATIONS[i]] ? 'own' : null);
+    const s = D.STATIONS[i];
+    src[s] = W.stationSource ? W.stationSource(s, p.t.x, p.t.y, B.CRAFT_RADIUS) : (stations[s] ? 'own' : null);
   }
+  const tier = E.playerTier ? E.playerTier(p) : 1;
   const list = [];
   for (let k = 0; k < D.RECIPES.length; k++) {
     const r = D.RECIPES[k];
@@ -876,33 +913,29 @@ S.craftView = function () {
     const fee = (stationOk && source === 'merchant') ? W.stationFee(r.station, p.t.x, p.t.y, B.CRAFT_RADIUS) : 0;
     const feeGold = fee > 0 ? Math.ceil(out.value * r.out.n * fee) : 0;
     const goldOk = p.gold >= feeGold;
-    const tier = E.recipeTier(r);
+    const rt = E.recipeTier ? E.recipeTier(r) : 1;
     list.push({
       id: r.id, outId: r.out.id, name: out.name, n: r.out.n, cat: out.cat,
       station: r.station, stationName: stationName(r.station), stationOk: stationOk,
       source: source, public: isPublic, pubName: pub ? pub.name : null,
       cdLeft: Math.ceil(cdLeft), cdOk: cdOk,
       reqOk: reqOk, reqText: D.reqText(r.req),
-      tier: tier, tierOk: tier <= E.playerTier(p),
+      tier: rt, tierOk: rt <= tier,
       saber: r.saber || null,
-      saberName: r.saber && D.SABER_BY_ID[r.saber] ? D.SABER_BY_ID[r.saber].name : null,
+      saberName: r.saber && D.SABER_BY_ID && D.SABER_BY_ID[r.saber] ? D.SABER_BY_ID[r.saber].name : null,
       saberOk: !r.saber || r.station === 'hand' || saberKnown(p, r.saber),
       unlockWhy: unlock.ok ? '' : unlock.why,
-      fuel: need, fuelOk: fuelOk,
-      fee: feeGold, goldOk: goldOk, ing: ing, desc: out.desc,
+      fuel: need, fuelOk: fuelOk, fee: feeGold, goldOk: goldOk,
+      ing: ing, desc: out.desc, sellers: D.sellersOf ? D.sellersOf(r.out.id) : [],
       can: have && stationOk && reqOk && fuelOk && goldOk && cdOk && unlock.ok && canFit(r.out.id, r.out.n)
     });
   }
   return {
     stations: stations, src: src, list: list, fuel: fuelHave,
-    level: p.lvl.level, points: p.lvl.points, rp: p.lvl.rp || 0, tier: E.playerTier(p),
-    publics: (W.publicList ? W.publicList() : []),
-    cd: S.publicCd
+    level: p.lvl.level, points: p.lvl.points, rp: p.lvl.rp || 0, tier: tier,
+    publics: (W.publicList ? W.publicList() : []), cd: S.publicCd
   };
 };
-function tagName(t) {
-  return { fish: 'Pescado', meat: 'Carne', grain: 'Grano', vegetable: 'Hortaliza', fruit: 'Fruta', fuel: 'Combustible', herbany: 'Hierba' }[t] || t;
-}
 S.craft = function (recipeId) {
   const p = P();
   let r = null;
@@ -921,15 +954,15 @@ S.craft = function (recipeId) {
   if (!D.meetsReq(r.req, p.lvl.level, p.lvl.alloc)) { toast('Requiere ' + D.reqText(r.req) + '.', 'bad'); A.play('error'); return; }
   const unlock = recipeOk(p, r);
   if (!unlock.ok) {
-    if (unlock.why === 'tier') toast('Receta de Tier ' + unlock.tier + ': tú estás en Tier ' + E.playerTier(p) + ' (sube de nivel).', 'bad');
-    else if (unlock.why === 'saber') toast('Necesitas aprender el saber «' + (D.SABER_BY_ID[r.saber] ? D.SABER_BY_ID[r.saber].name : r.saber) + '» (tecla J).', 'bad');
+    if (unlock.why === 'tier') toast('Receta de Tier ' + unlock.tier + ': sube de nivel para fabricarla.', 'bad');
+    else if (unlock.why === 'saber') toast('Aprende el saber «' + (D.SABER_BY_ID[r.saber] ? D.SABER_BY_ID[r.saber].name : r.saber) + '» en el Recetario (J).', 'bad');
     else toast('Receta no aprendida todavía.', 'bad');
     A.play('error'); return;
   }
   const fuelPlus = isPublic && pub ? (pub.fuelPlus || 0) : 0;
   const need = fuelCost(r, p) + fuelPlus;
   if (need > 0 && E.Inv.fuel(p) < need) {
-    toast('Falta combustible: ' + need + ' unidades (madera 1, carbón 4, carbón vegetal 6)' + (fuelPlus ? ' +1 del horno público' : '') + '.', 'bad');
+    toast('Falta combustible: ' + need + ' unidades (madera 1, carbón 4, carbón vegetal 6).', 'bad');
     A.play('error'); return;
   }
   for (let i = 0; i < r.in.length; i++) {
@@ -947,26 +980,23 @@ S.craft = function (recipeId) {
   }
   if (need > 0) E.Inv.burnFuel(p, need);
   if (feeGold > 0) p.gold -= feeGold;
-  if (isPublic && pub) S.publicCd[r.station] = pub.cd || B.PUBLIC_CRAFT_CD;
+  if (isPublic && pub) S.publicCd[r.station] = pub.cd || B.PUBLIC_CRAFT_CD || 6;
   let n = r.out.n;
   if (out.stack > 1 && !isPublic) {
     const bonus = E.skillVal(p, 'yield') + E.levelOf(p, 'crafting') * B.TRADE_BONUS;
     if (lootRng().chance(U.clamp(bonus, 0, 0.8))) n += 1;
   }
-  const q = isPublic ? 0 : craftQuality(p, out);   /* lo público nunca sale con calidad */
+  const q = isPublic ? 0 : craftQuality(p, out);
   E.Inv.add(p, r.out.id, n, q);
   E.autoAmmo(p);
   A.play(r.station === 'forge' ? 'pick' : 'craft');
   fx('spark', p.t.x, p.t.y);
   const trade = r.skill || (out.cat === 'food' ? 'cooking' : (out.weapon || out.shield || out.ammo ? 'combat' : 'crafting'));
   E.addXP(p, trade, r.xp || B.XP_CRAFT);
-  toast('Fabricado: ' + out.name + ' ×' + n +
-    (q ? ' (calidad ' + (q + 1) + ')' : (isPublic ? ' (público, sin calidad)' : '')) +
-    (feeGold ? ' · taller ' + feeGold + ' oro' : ''), 'good');
+  tick('Fabricado: ' + out.name + ' ×' + n + (q ? ' · calidad ' + (q + 1) : (isPublic ? ' · público' : '')) + (feeGold ? ' · taller ' + feeGold + ' oro' : ''), 'good');
   Bus.emit('crafted', { id: r.out.id, n: n, station: r.station, public: isPublic });
   Bus.emit('panel:update', {});
 };
-/* Talleres que presta un mercader */
 S.stationsView = function (npcId) {
   const p = P();
   const key = D.MERCHANT_STATIONS[npcId] ? npcId : (D.NPCS[npcId] && D.NPCS[npcId].hunter ? 'hunter' : null);
@@ -977,12 +1007,42 @@ S.stationsView = function (npcId) {
     list.push({ id: s, name: info.name, glyph: info.glyph, desc: info.desc, fuel: info.fuel,
       reqText: D.reqText(info.req), reqOk: D.meetsReq(info.req, p.lvl.level, p.lvl.alloc) });
   }
-  return { npcId: npcId, name: D.NPCS[npcId] ? D.NPCS[npcId].name : 'Mercader', fee: ms ? ms.fee : 0, list: list, gold: p.gold,
-    publics: (W.publicList ? W.publicList() : []) };
+  return { npcId: npcId, name: D.NPCS[npcId] ? D.NPCS[npcId].name : 'Mercader', fee: ms ? ms.fee : 0,
+    list: list, gold: p.gold, publics: (W.publicList ? W.publicList() : []), cd: S.publicCd };
 };
 /* ==========================================================
-11 · AGRICULTURA (v4: el desgaste usa E.wearTool → rompe sin borrar)
+11 · AGRICULTURA
 ========================================================== */
+function wearToolSafe(p, n) {
+  if (E.wearTool) { E.wearTool(p, n); return; }
+  const s = p.equip.tool;
+  if (!s || s.dur === undefined) return;
+  s.dur = Math.max(0, s.dur - (n || 1));
+  if (s.dur === 0) {
+    const def = D.ITEMS[s.id];
+    toast((def ? def.name : 'Herramienta') + ' se ha roto. Repárala desde el inventario.', 'bad');
+    A.play('error');
+    E.recalc(p);
+  }
+}
+function brokenOf(s) {
+  if (E.isBroken) return E.isBroken(s);
+  return !!(s && s.dur !== undefined && s.dur <= 0);
+}
+function repairInfoSafe(p, ref) {
+  if (E.repairInfo) return E.repairInfo(p, ref);
+  const s = typeof ref === 'number' ? p.inv[ref] : p.equip[ref];
+  if (!s || s.dur === undefined) return null;
+  const def = D.ITEMS[s.id];
+  if (!def) return null;
+  const max = maxDurOf(def);
+  const cost = def.repair || { wood: 1, fiber: 1 };
+  const missing = [];
+  for (const k in cost) if (E.Inv.count(p, k) < cost[k]) missing.push(k);
+  return { id: s.id, name: def.name, broken: s.dur <= 0, dur: s.dur, max: max,
+    cost: cost, can: missing.length === 0, missing: missing };
+}
+
 S.farmView = function (x, y) {
   const p = player();
   const soil = W.soilAt(x, y);
@@ -1029,9 +1089,9 @@ S.farmAct = function (x, y, act, param) {
     p.st.st -= 4;
     W.setSoil(idx, { crop: null, growth: 0, watered: false, fert: null, q: 0, owner: 'player', day: Time.day });
     E.addXP(p, 'farming', B.XP_TILL);
-    E.wearTool(p, 1);
+    wearToolSafe(p, 1);
     A.play('build'); fx('dust', x + 0.5, y + 0.5);
-    toast('Tierra arada.', 'good');
+    tick('Tierra arada', 'good');
   } else if (act === 'plant') {
     if (!soil || soil.crop) return;
     if (!owned) { toast('Solo en tus parcelas.', 'bad'); return; }
@@ -1041,13 +1101,13 @@ S.farmAct = function (x, y, act, param) {
     A.play('harvest'); fx('leaf', x + 0.5, y + 0.5);
     E.addXP(p, 'farming', 3);
     S.helpProgress('plant', x, y, 1);
-    toast('Sembrado: ' + D.CROPS[soil.crop].name, 'good');
+    tick('Sembrado: ' + D.CROPS[soil.crop].name, 'good');
   } else if (act === 'fert') {
     if (!soil || soil.crop) return;
     if (!E.Inv.remove(p, param, 1)) { toast('No tienes ese fertilizante.', 'bad'); return; }
     soil.fert = param;
     A.play('harvest'); fx('spark', x + 0.5, y + 0.5);
-    toast('Fertilizante aplicado.', 'good');
+    tick('Fertilizante aplicado', 'good');
   } else if (act === 'water') {
     if (!soil || !soil.crop) return;
     const ti = E.toolInfo(p);
@@ -1056,11 +1116,11 @@ S.farmAct = function (x, y, act, param) {
     if (p.st.st < 2) { toast('Sin stamina.', 'bad'); return; }
     p.st.st -= 2;
     soil.watered = true;
-    E.wearTool(p, 1);
+    wearToolSafe(p, 1);
     A.play('splash'); fx('water', x + 0.5, y + 0.5);
     E.addXP(p, 'farming', 2);
     S.helpProgress('water', x, y, 1);
-    toast('Cultivo regado.' + (well ? ' (pozo cercano)' : ''), 'good');
+    tick('Cultivo regado' + (well ? ' · pozo cercano' : ''), 'good');
   } else if (act === 'harvest') {
     if (!soil || !soil.crop || soil.growth < 1) return;
     const cd = D.CROPS[soil.crop];
@@ -1081,10 +1141,9 @@ S.farmAct = function (x, y, act, param) {
       E.addXP(p, 'farming', B.XP_HARVEST);
       A.play('harvest');
       floater(x + 0.5, y + 0.2, '+' + n + ' ' + cd.name + ' · calidad ' + (q + 1), '#efe3c8');
-      toast('Cosechado: ' + cd.name + ' ×' + n + ' (calidad ' + (q + 1) + ')', 'good');
+      tick('Cosechado: ' + cd.name + ' ×' + n + ' · calidad ' + (q + 1), 'good');
       if (lootRng().chance(0.5 + yieldB)) E.Inv.add(p, cd.seed, 1, 0);
     }
-    /* Hoz: cosecha también las adyacentes maduras */
     if (sickle) {
       for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
         if (!ox && !oy) continue;
@@ -1098,7 +1157,7 @@ S.farmAct = function (x, y, act, param) {
         s2.crop = null; s2.growth = 0; s2.fert = null; s2.watered = false;
         S.helpProgress('harvest', x + ox, y + oy, 1);
       }
-      E.wearTool(p, 1);
+      wearToolSafe(p, 1);
     }
     S.helpProgress('harvest', x, y, 1);
     soil.crop = null; soil.growth = 0; soil.fert = null; soil.watered = false;
@@ -1121,7 +1180,7 @@ function nearWell(x, y) {
 S.helpTaskView = function (npcId) {
   const farm = W.farms.find(function (f) { return f.owner === npcId; });
   const active = S.help && S.help.npcId === npcId ? S.help : null;
-  let counts = { water: 0, harvest: 0, plant: 0, feed: 0 };
+  const counts = { water: 0, harvest: 0, plant: 0, feed: 0 };
   if (farm) {
     W.soil.forEach(function (s, idx) {
       const x = idx % C.WORLD, y = (idx / C.WORLD) | 0;
@@ -1148,7 +1207,6 @@ S.helpTaskView = function (npcId) {
   };
 };
 S.acceptHelpTask = function (npcId, kind) {
-  const p = player();
   if (S.help) { toast('Ya tienes una tarea en curso con ' + D.NPCS[S.help.npcId].name + '.', 'bad'); return; }
   if (dailyUsed(npcId, 'help')) { toast('Ya ayudaste a ' + D.NPCS[npcId].name + ' hoy. Vuelve mañana.', ''); return; }
   const farm = W.farms.find(function (f) { return f.owner === npcId; });
@@ -1213,7 +1271,7 @@ S.cancelHelpTask = function () {
 };
 
 /* ==========================================================
-13 · CONSTRUCCIÓN, MEJORAS Y PARCELAS
+13 · CONSTRUCCIÓN Y PARCELAS
 ========================================================== */
 S.buildView = function () {
   const p = player();
@@ -1296,14 +1354,17 @@ S.upgrade = function (uid) {
 };
 S.buildingInteract = function (b) {
   if (!b) return;
-  if (b.key === 'stall') { openPanel('shop', { stall: true }); return; }
-  /* v4: talleres PÚBLICOS del mercado (horno y mesa) abren el crafteo */
   if (b.city && b.data && b.data.public) { openPanel('craft', {}); return; }
+  if (b.key === 'land_office') { S.startDialog('supremo'); return; }
+  if (b.key === 'inn') { openPanel('bed', {}); return; }
+  if (b.city && b.data && b.data.vendor) {
+    const nd = D.NPCS[b.data.vendor];
+    if (nd && nd.shop) { openPanel('shop', { npcId: b.data.vendor }); return; }
+  }
+  if (b.key === 'stall') { openPanel('shop', { stall: true }); return; }
   if (b.owner !== 'player') {
-    if (b.key === 'pen') toast('Aquí te encerraron al llegar a Vhalor.', '');
-    else if (b.key === 'inn') openPanel('bed', {});
-    else if (b.key === 'land_office') S.startDialog('supremo');
-    else toast(b.info ? b.info.name : 'Edificio', '');
+    if (b.key === 'pen') tick('Aquí te encerraron al llegar a Vhalor.', '');
+    else tick(b.info ? b.info.name : 'Edificio', '');
     return;
   }
   const bd = D.BUILDINGS[b.key];
@@ -1316,7 +1377,7 @@ S.buildingInteract = function (b) {
   let hasStation = false;
   for (let i = 0; i < fn.length; i++) if (D.STATIONS.indexOf(fn[i]) >= 0) { hasStation = true; break; }
   if (hasStation) { openPanel('craft', {}); return; }
-  toast(bd.name + ': ' + bd.desc, '');
+  tick(bd.name + ': ' + bd.desc, '');
 };
 S.parcelView = function () {
   const p = player();
@@ -1404,14 +1465,14 @@ S.setRole = function (uid, role) {
   e.ai.state = role === 'idle' ? 'wander' : (role === 'follow' || role === 'guard' ? 'guard' : 'work');
   e.ai.path = null;
   const rd = D.ROLES.find(function (r) { return r.id === role; });
-  toast(e.name + ' → ' + (rd ? rd.name : role), 'good');
+  tick(e.name + ' → ' + (rd ? rd.name : role), 'good');
   Bus.emit('panel:update', {});
 };
 S.dismiss = function (uid) {
   const e = E.byId.get(uid);
   if (!e || e.type !== 'worker' || e.tg.child) return;
   e.tg.dead = true;
-  toast(e.name + ' ha sido liberado de tu servicio.', '');
+  tick(e.name + ' ha sido liberado de tu servicio.', '');
   Bus.emit('panel:update', {});
 };
 S.onWork = function (d) {
@@ -1580,15 +1641,15 @@ S.growChildren = function () {
       e.st.maxHp = stage === 'adult' ? 95 : stage === 'teen' ? 75 : 60;
       e.st.hp = e.st.maxHp;
       e.cb.dmg = stage === 'adult' ? 12 : stage === 'teen' ? 8 : 4;
-      if (stage === 'teen') toast(c.name + ' ya puede ayudar con roles.', 'good');
-      toast(c.name + ' ha crecido: ' + stageName(stage) + '.', 'gold');
+      if (stage === 'teen') tick(c.name + ' ya puede ayudar con roles.', 'good');
+      tick(c.name + ' ha crecido: ' + stageName(stage) + '.', 'gold');
     }
   }
 };
 function stageName(s) { return { baby: 'bebé', child: 'niño', teen: 'joven', adult: 'adulto' }[s] || s; }
 
 /* ==========================================================
-16 · CONTRATOS (caza y recolección)
+16 · CONTRATOS
 ========================================================== */
 S.questView = function () {
   const p = player();
@@ -1648,7 +1709,7 @@ S.onKill = function (d) {
   if (!q || q.kind !== 'hunt' || d.species !== q.target) return;
   S.quests.progress++;
   if (S.quests.progress >= q.count) { toast('Contrato completado. Vuelve con Roderic.', 'gold'); A.play('quest'); }
-  else toast('Contrato: ' + S.quests.progress + '/' + q.count, '');
+  else tick('Contrato: ' + S.quests.progress + '/' + q.count, '');
   Bus.emit('quest:progress', { id: q.id, progress: S.quests.progress });
 };
 S.turnInQuest = function () {
@@ -1671,7 +1732,7 @@ S.turnInQuest = function () {
 };
 
 /* ==========================================================
-17 · PESCA Y RED (v4: desgaste sin borrado)
+17 · PESCA SILENCIOSA
 ========================================================== */
 S.startFishing = function (spot) {
   const p = player();
@@ -1682,25 +1743,23 @@ S.startFishing = function (spot) {
   p.st.st -= 3;
   const bait = E.Inv.remove(p, 'bait', 1);
   const wait = B.FISH_WAIT[0] + rng().next() * (B.FISH_WAIT[1] - B.FISH_WAIT[0]);
-  const win = B.FISH_WINDOW + ti.pow * 0.15 + (bait ? B.FISH_BAIT_BONUS : 0) + E.levelOf(p, 'fishing') * 0.03;
+  const win = (B.FISH_WINDOW || 0.95) + ti.pow * 0.15 + (bait ? B.FISH_BAIT_BONUS : 0) + E.levelOf(p, 'fishing') * 0.03;
   S.fishing = { phase: 'wait', t: wait, window: win, spot: spot, bait: bait, rod: ti };
   gateInput();
   A.play('splash');
-  toast('Lanzas la caña… espera el tirón.' + (bait ? ' (con cebo)' : ''), '');
-  Bus.emit('fishing:state', { phase: 'wait', t: wait });
+  Bus.emit('fishing:state', { phase: 'wait', t: wait, window: win, bait: bait, spot: spot });
 };
 S.updateFishing = function (dt) {
   const f = S.fishing;
   if (!f) return;
   const m = CR.Input.getMove();
-  if (m.mag > 0.4) { S.cancelFishing('Te has movido: pesca cancelada.'); return; }
+  if (m.mag > 0.4) { S.cancelFishing('move'); return; }
   f.t -= dt;
   if (f.phase === 'wait' && f.t <= 0) {
     f.phase = 'bite'; f.t = f.window;
     A.play('splash', { rate: 1.3 });
-    toast('¡PICA! Pulsa atacar o interactuar ahora.', 'gold');
-    Bus.emit('fishing:state', { phase: 'bite', t: f.window });
-  } else if (f.phase === 'bite' && f.t <= 0) S.cancelFishing('Se ha escapado…');
+    Bus.emit('fishing:state', { phase: 'bite', t: f.window, window: f.window, spot: f.spot });
+  } else if (f.phase === 'bite' && f.t <= 0) S.cancelFishing('escaped');
 };
 function rollFish(spot) {
   const biome = W.biomeAt(spot.x, spot.y);
@@ -1716,24 +1775,22 @@ S.fishingPress = function () {
   if (!f || f.phase !== 'bite') return;
   const p = player();
   const fish = rollFish(f.spot);
-  if (!canFit(fish, 1)) { S.cancelFishing('Inventario lleno.'); return; }
+  if (!canFit(fish, 1)) { S.cancelFishing('full'); return; }
   E.Inv.add(p, fish, 1, 0);
   E.addXP(p, 'fishing', B.XP_FISH);
-  E.wearTool(p, 1);
+  wearToolSafe(p, 1);
   A.play('fish');
   fx('water', f.spot.x + 0.5, f.spot.y + 0.5);
   floater(p.t.x, p.t.y - 0.8, '+1 ' + D.ITEMS[fish].name, '#8fd0f0');
-  toast('¡Capturado: ' + D.ITEMS[fish].name + '!', 'good');
   S.fishing = null;
   gateInput();
-  Bus.emit('fishing:state', { phase: 'done' });
+  Bus.emit('fishing:state', { phase: 'done', fish: fish });
 };
-S.cancelFishing = function (msg) {
+S.cancelFishing = function (reason) {
   if (!S.fishing) return;
   S.fishing = null;
   gateInput();
-  if (msg) toast(msg, 'bad');
-  Bus.emit('fishing:state', { phase: 'idle' });
+  Bus.emit('fishing:state', { phase: 'idle', reason: reason || '' });
 };
 S.useNet = function () {
   const p = player();
@@ -1753,7 +1810,7 @@ S.useNet = function () {
   E.addXP(p, 'fishing', B.XP_FISH * got);
   A.play('fish');
   fx('water', spot.x + 0.5, spot.y + 0.5);
-  toast(got ? 'La red trae ' + got + ' capturas.' : 'La red vuelve vacía: inventario lleno.', got ? 'good' : 'bad');
+  tick(got ? 'La red trae ' + got + ' capturas' : 'La red vuelve vacía: inventario lleno', got ? 'good' : 'bad');
 };
 
 /* ==========================================================
@@ -1781,7 +1838,7 @@ S.theft = function (ownerId, itemId, n, q) {
   } else {
     addTrust(ownerId, -8);
     E.heat = Math.min(100, E.heat + 5);
-    toast('Has robado sin testigos… por ahora.', 'bad');
+    tick('Has robado sin testigos… por ahora.', 'bad');
   }
   A.play('harvest');
 };
@@ -1814,7 +1871,7 @@ S.charity = function () {
   addTrust('maera', 5);
   S.flags.charitable = true;
   A.play('coin');
-  toast('Tu caridad conforta a los pobres de Vhalor.', 'good');
+  tick('Tu caridad conforta a los pobres de Vhalor.', 'good');
 };
 
 /* ==========================================================
@@ -1849,7 +1906,7 @@ S.giveGift = function (npcId, slot) {
   markDaily(npcId, 'gift');
   addTrust(npcId, gain);
   A.play('tame');
-  toast(nd.name + (loved ? ' ¡le encanta!' : ' agradece el regalo.') + ' +' + gain, 'good');
+  tick(nd.name + (loved ? ' ¡le encanta!' : ' agradece el regalo.') + ' +' + gain, 'good');
   Bus.emit('panel:update', {});
 };
 S.socialView = function () {
@@ -1859,7 +1916,7 @@ S.socialView = function () {
     const t = trustOf(id);
     return { id: id, name: nd.name, role: nd.role, trust: t, band: bandOf(t),
       rel: S.rel[id] || 'none', romance: nd.romance && nd.gender !== p.gender,
-      wanderer: !!nd.wanderer, hunter: !!nd.hunter, farmer: !!nd.farmer,
+      wanderer: !!nd.wanderer, hunter: !!nd.hunter, farmer: !!nd.farmer, stall: !!nd.stall,
       consequences: nd.consequences };
   });
   return { list: list, family: S.familyView(), help: S.help };
@@ -1872,7 +1929,8 @@ S.onKO = function () {
   const p = player();
   S.uiMode = 'ko';
   gateInput();
-  if (S.fishing) S.cancelFishing();
+  if (S.fishing) S.cancelFishing('ko');
+
   let text;
   if (!p.free) {
     p.debt += B.KO_DEBT;
@@ -1887,9 +1945,11 @@ S.onKO = function () {
         if (s.n <= 0) p.inv[i] = null;
       }
     }
-    if (lostItems.length) E.dropLoot(p.t.x, p.t.y, lostItems, { life: 300, delay: 3 });
+    if (lostItems.length && E.dropLoot) {
+      E.dropLoot(p.t.x, p.t.y, lostItems, { life: 300, delay: 3 });
+    }
     text = 'Los cazadores de Bareth te arrastran de vuelta. Tu deuda aumenta en ' + B.KO_DEBT +
-      ' oro y ' + lost + ' materiales quedan en el suelo donde caíste (duran 5 min).';
+      ' oro' + (lost > 0 ? ' y ' + lost + ' materiales quedan en el suelo donde caíste (duran 5 min).' : '.');
   } else {
     const lose = Math.floor(p.gold * B.KO_GOLD_LOSS);
     p.gold -= lose;
@@ -1914,7 +1974,7 @@ S.respawn = function () {
 };
 
 /* ==========================================================
-21 · VISTAS DE PANELES (v4: roturas y reparación visibles)
+21 · VISTAS DE PANELES (con roturas y reparación visibles)
 ========================================================== */
 S.houseView = function (uid) {
   const b = W.byUid(uid);
@@ -2006,25 +2066,26 @@ S.inventoryView = function () {
     if (!s) return null;
     const def = D.ITEMS[s.id];
     if (!def) return null;
-    const maxDur = E.maxDurOf(def);
-    const broken = E.isBroken(s);
+    const maxDur = maxDurOf(def);
+    const broken = brokenOf(s);
     return { slot: i, id: s.id, name: def.name, n: s.n, q: s.q | 0, dur: s.dur,
       maxDur: maxDur, broken: broken,
-      repair: (s.dur !== undefined && s.dur < maxDur) ? E.repairInfo(p, i) : null,
+      repair: (s.dur !== undefined && s.dur < maxDur) ? repairInfoSafe(p, i) : null,
       cat: def.cat, desc: def.desc };
   });
   const equip = {};
   for (let i = 0; i < E.EQUIP_SLOTS.length; i++) {
     const k = E.EQUIP_SLOTS[i], s = p.equip[k];
-    equip[k] = s && D.ITEMS[s.id] ? {
-      id: s.id, name: D.ITEMS[s.id].name, dur: s.dur, maxDur: E.maxDurOf(D.ITEMS[s.id]),
-      broken: E.isBroken(s),
-      repair: (s.dur !== undefined && s.dur < E.maxDurOf(D.ITEMS[s.id])) ? E.repairInfo(p, k) : null
-    } : null;
+    if (!s || !D.ITEMS[s.id]) { equip[k] = null; continue; }
+    const def = D.ITEMS[s.id], md = maxDurOf(def);
+    equip[k] = { id: s.id, name: def.name, dur: s.dur, maxDur: md,
+      broken: brokenOf(s),
+      repair: (s.dur !== undefined && s.dur < md) ? repairInfoSafe(p, k) : null };
   }
   return {
     items: items, equip: equip, gold: p.gold, slots: p.inv.length, quick: p.quick,
-    level: p.lvl.level, points: p.lvl.points, rp: p.lvl.rp || 0, tier: E.playerTier(p),
+    level: p.lvl.level, points: p.lvl.points, rp: p.lvl.rp || 0,
+    tier: E.playerTier ? E.playerTier(p) : 1,
     sabers: Object.keys(p.lvl.sabers || {}),
     ammo: E.ammoInfo(p), ammoList: E.ammoList(p),
     fuel: E.Inv.fuel(p),
@@ -2038,23 +2099,6 @@ S.inventoryView = function () {
         pct: lv >= tbl.length - 1 ? 100 : U.clamp((p.xp[s].xp - c0) / Math.max(1, c1 - c0), 0, 1) * 100 };
     })
   };
-};
-/* Reparación barata desde la UI (mejora 6) */
-S.repairInv = function (slot) {
-  const p = player();
-  const r = E.repairInvSlot(p, slot);
-  toast(r.msg, r.ok ? 'good' : 'bad');
-  if (!r.ok) A.play('error');
-  Bus.emit('panel:update', {});
-  return r;
-};
-S.repairEquip = function (key) {
-  const p = player();
-  const r = E.repairEquip(p, key);
-  toast(r.msg, r.ok ? 'good' : 'bad');
-  if (!r.ok) A.play('error');
-  Bus.emit('panel:update', {});
-  return r;
 };
 S.dropSlot = function (slot, n) {
   const p = player();
@@ -2072,7 +2116,7 @@ S.dropSlot = function (slot, n) {
   if (!l) return false;
   E.Inv.removeAt(p, slot, cnt);
   A.play('open');
-  toast('Tiraste ' + def.name + ' ×' + cnt + ' (dura 3 min; recógelo con interactuar).', '');
+  tick('Tiraste ' + def.name + ' ×' + cnt + ' · dura 3 min', '');
   return true;
 };
 S.assignQuick = function (slot, id) {
@@ -2082,6 +2126,35 @@ S.assignQuick = function (slot, id) {
   Bus.emit('quick:update', {});
   Bus.emit('panel:update', {});
 };
+/** Copia equipada (en cualquier ranura de equipo) de un objeto, o null. */
+function equippedCopy(p, id) {
+  for (const k in p.equip) {
+    const s = p.equip[k];
+    if (s && s.id === id) return { key: k, s: s };
+  }
+  return null;
+}
+S.equippedCopy = equippedCopy;
+/** Estado de un objeto de la barra rápida: 'equipped' | 'ok' | 'broken' | 'missing'. */
+S.quickState = function (p, id) {
+  const eq = equippedCopy(p, id);
+  if (eq && !brokenOf(eq.s)) return 'equipped';
+  if (E.Inv.findUsable ? E.Inv.findUsable(p, id) >= 0 : E.Inv.find(p, id) >= 0) return 'ok';
+  if (eq || E.Inv.find(p, id) >= 0) return 'broken';
+  return 'missing';
+};
+function brokenMsg(p, id, def) {
+  const eq = equippedCopy(p, id);
+  const ref = eq ? eq.key : E.Inv.find(p, id);
+  const info = ref !== -1 && ref !== undefined ? repairInfoSafe(p, ref) : null;
+  let m = def.name + ' está ROTA: repárala en el inventario';
+  if (info && info.cost) {
+    const parts = [];
+    for (const k in info.cost) parts.push(info.cost[k] + ' ' + (D.ITEMS[k] ? D.ITEMS[k].name.toLowerCase() : k));
+    m += ' (' + parts.join(' + ') + ')';
+  }
+  return m + '.';
+}
 S.useQuick = function (slot) {
   const p = player();
   if (!p) return;
@@ -2090,20 +2163,30 @@ S.useQuick = function (slot) {
   const def = D.ITEMS[id];
   if (!def) return;
   if (def.tool || def.weapon || def.shield || def.armor || def.acc || def.bag) {
-    const i = E.Inv.findUsable(p, id);
-    if (i >= 0) { const r = E.equipFromSlot(p, i); toast(r.msg, r.ok ? 'good' : 'bad'); }
-    else if (p.equip.weapon && p.equip.weapon.id === id) toast(def.name + ' ya está equipada.', '');
-    else if (E.isBroken(p.equip.tool) && p.equip.tool.id === id) toast(def.name + ' está ROTA: repárala en el inventario.', 'bad');
-    else toast('No lo tienes usable en la mochila.', 'bad');
+    const st = S.quickState(p, id);
+    if (st === 'equipped') { tick(def.name + ' ya está equipada', ''); }
+    else if (st === 'ok') {
+      let i = -1;
+      if (E.Inv.findUsable) i = E.Inv.findUsable(p, id);
+      else {
+        for (let k = 0; k < p.inv.length; k++) {
+          const sl = p.inv[k];
+          if (sl && sl.id === id && !brokenOf(sl)) { i = k; break; }
+        }
+      }
+      const r = i >= 0 ? E.equipFromSlot(p, i) : { ok: false, msg: 'No se pudo equipar.' };
+      if (r.ok) tick(r.msg, 'good'); else toast(r.msg, 'bad');
+    }
+    else if (st === 'broken') toast(brokenMsg(p, id, def), 'bad');
+    else toast('Ya no tienes ' + def.name.toLowerCase() + '.', 'bad');
   } else {
     const r = E.useItem(p, id);
-    toast(r.msg, r.ok ? 'good' : 'bad');
+    if (r.ok) tick(r.msg, 'good'); else toast(r.msg, 'bad');
   }
   Bus.emit('quick:update', {});
 };
-
 /* ==========================================================
-22 · GUARDADO v3 (compatible con saberes v4)
+22 · GUARDADO v3 (compatible con saberes)
 ========================================================== */
 function checksum(str) {
   let h = 2166136261;
@@ -2198,7 +2281,7 @@ S.exportSave = function () {
     const blob = new Blob([raw], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'kanato-jotun-save-v4.json';
+    a.href = url; a.download = 'kanato-jotun-save-v5.json';
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
     toast('Guardado exportado.', 'good');
@@ -2212,6 +2295,7 @@ S.deleteSave = function () {
   } catch (e) { /* almacenamiento no disponible */ }
 };
 
-console.info('[CR] systems.js v4 listo · 6 estaciones + talleres públicos · tiers y saberes · ' +
-  'reparación de roturas · tareas de granja · dormir · tierras · contratos · guardado v3');
+console.info('[CR] systems.js v5 listo · avisos no invasivos · puestos con dueño · ' +
+  'tiers y saberes · talleres públicos · reparación de roturas · pesca silenciosa · ' +
+  'tareas de granja · dormir · tierras · contratos · guardado v3');
 })();

@@ -579,13 +579,18 @@ UI.refreshQuickbar = function () {
       if (q.ic && q.ic._ik !== '') { q.ic._ik = ''; q.ic.innerHTML = ''; }
       setText(q.ct, '');
       q.node.classList.add('empty');
+      q.node.classList.remove('sel', 'broke');
       continue;
     }
     const key = itemKey(id);
     if (q.ic && q.ic._ik !== key) { q.ic._ik = key; q.ic.innerHTML = Art.html(key, 24); }
     const n = E.Inv.count(p, id);
-    setText(q.ct, def.stack > 1 ? String(n || '') : '');
-    q.node.classList.toggle('empty', n === 0 && def.stack > 1);
+    const gear = !!(def.tool || def.weapon || def.shield || def.armor || def.acc || def.bag);
+    const st = gear ? S.quickState(p, id) : (n > 0 ? 'ok' : 'missing');
+    setText(q.ct, st === 'broken' ? 'ROTA' : (def.stack > 1 ? String(n || '') : ''));
+    q.node.classList.toggle('empty', st === 'missing');
+    q.node.classList.toggle('sel', st === 'equipped');
+    q.node.classList.toggle('broke', st === 'broken');
     if (q.node._t !== def.name) { q.node._t = def.name; q.node.title = def.name; }
   }
 };
@@ -899,7 +904,7 @@ function initButtons() {
       }, false, 'ui');
     })(i, qb[i]);
   }
-  const menu = { 'btn-inv': 'inventory', 'btn-craft': 'craft', 'btn-map': 'map', 'btn-social': 'social', 'btn-settings': 'settings' };
+  const menu = { 'btn-inv': 'inventory', 'btn-craft': 'craft', 'btn-map': 'map', 'btn-social': 'social', 'btn-pets': 'pets', 'btn-settings': 'settings' };
   Object.keys(menu).forEach(function (id) {
     const n = el(id);
     if (n) CR.Bindings.add(n, 'click', function () { UI.toggleLocal(menu[id]); }, false, 'ui');
@@ -987,6 +992,7 @@ function initKeys() {
     else if (code === 'KeyJ') UI.openRecipes();
     else if (code === 'KeyM') UI.toggleLocal('map');
     else if (code === 'KeyR') UI.toggleLocal('social');
+    else if (code === 'KeyP') UI.toggleLocal('pets');
     else if (code === 'KeyH') UI.openSkills();
     else if (code === 'KeyB') UI.openBuild();
     else if (code === 'KeyO') UI.enterCtlEdit();
@@ -1800,6 +1806,41 @@ UI.renderLocal = function () {
       : '<p class="muted">Sin familia aún.</p>';
     h += '<div class="qbar">' + btnI('openfamily', 'family', 'Panel de familia', 'primary') + '</div>';
 
+  } else if (k === 'pets') {
+    title = 'Compañeros'; ic = uiimg('tame', 20);
+    const plist = E.companionList();
+    if (!plist.length) {
+      h += warn('No tienes compañeros domados. Acércate a un animal domable y pulsa Interactuar.');
+    } else {
+      h += '<div class="qbar">' + btnI('petall', 'tame', 'Todos me siguen', 'primary', 'data-ord="follow"') +
+        btnI('petall', 'pause', 'Todos quietos', '', 'data-ord="stay"') + '</div>';
+      h += '<p class="muted">Apunta hacia una criatura, un recurso (hierba, arbusto) o un punto del suelo y pulsa <b>Objetivo</b>: los que atacan irán a por la criatura; los herbívoros irán al punto o forrajearán el recurso.</p>';
+      for (let i = 0; i < plist.length; i++) {
+        const e = plist[i], sup = E.isSupport(e), ord = e.tg.order || 'follow';
+        const tags = [];
+        if (sup) tags.push(chip('Apoyo', true));
+        if (E.canAttackOrder(e)) tags.push(chip('Combate', false));
+        if (e.tg.baby) tags.push(chip('Cría', false));
+        if (e.tg.mountable) tags.push(chip('Montura', false));
+        const sub2 = Math.round(e.st.hp) + '/' + e.st.maxHp + ' PV · <b>' + esc(E.PET_ORDER_NAMES[ord] || 'Te sigue') + '</b>';
+        const uidA = 'data-uid="' + e.id + '"';
+        function ob(o, key, label) {
+          return btnI('petord', key, label, ord === o ? 'primary' : '', uidA + ' data-ord="' + o + '"');
+        }
+        let acts = ob('follow', 'tame', 'Seguir') + ob('stay', 'pause', 'Quieto') +
+          btnI('pettarget', 'target', 'Objetivo', '', uidA);
+        if (sup) {
+          acts += '<br>' + ob('haul', 'role_haul', 'Recoger botín') + ob('forage', 'role_farm', 'Forrajear') +
+            ob('watch', 'eye', 'Vigía') + ob('manure', 'role_tend', 'Abonar');
+        }
+        const rel = UI._relUid === e.id;
+        acts += '<br>' + btnI('petrelease', 'warning', rel ? '¿Seguro? Pulsa otra vez' : 'Liberar', 'danger', uidA);
+        h += row(Art.html('sp:' + e.species, 28), ictxt(e.name) + ' ' + tags.join(''), sub2, '') +
+          '<div class="ractions" style="flex:initial;justify-content:flex-start;margin:-2px 0 10px 4px">' + acts.replace(/<br>/g, '') + '</div>';
+      }
+      h += '<p class="muted">Tareas de apoyo: <b>Recoger botín</b> trae a tu mochila lo que cae al suelo a tu alrededor; <b>Forrajear</b> recolecta plantas y arbustos cercanos; <b>Vigía</b> te avisa de depredadores y enemigos desde su puesto; <b>Abonar</b> produce estiércol para tus cultivos. Si hay peligro, los que no atacan huyen.</p>';
+    }
+
   } else if (k === 'settings') {
     title = 'Ajustes'; ic = uiimg('settings', 20);
     const sv = CR.Settings.values;
@@ -1981,6 +2022,24 @@ function initModalHandlers() {
         refresh(); break;
       }
       case 'buyslave': S.buySlave(); break;
+      case 'petord': {
+        const pe = E.byId.get(uid);
+        if (pe) { const r = E.setOrder(pe, b.getAttribute('data-ord'), null); if (r.msg) UI.toast(r.msg, r.ok ? 'good' : 'bad'); if (!r.ok) A.play('error'); }
+        UI._relUid = 0; refresh(); break;
+      }
+      case 'pettarget': {
+        const pe = E.byId.get(uid);
+        if (pe) { const r = E.orderToTarget(pe); if (r.msg) UI.toast(r.msg, r.ok ? 'good' : 'bad'); if (!r.ok) A.play('error'); }
+        UI._relUid = 0; refresh(); break;
+      }
+      case 'petall': E.orderAll(b.getAttribute('data-ord')); UI._relUid = 0; refresh(); break;
+      case 'petrelease': {
+        const pe = E.byId.get(uid);
+        if (!pe) { refresh(); break; }
+        if (UI._relUid === uid) { UI._relUid = 0; E.releasePet(pe); }
+        else { UI._relUid = uid; UI.toast('Pulsa Liberar otra vez para soltar a ' + clean(pe.name) + '.', ''); }
+        refresh(); break;
+      }
       case 'dismiss': S.dismiss(uid); break;
       case 'propose': S.propose(id); break;
       case 'wedding': S.wedding(); break;
@@ -2065,6 +2124,7 @@ function initModalHandlers() {
   Bus.on('globallevel', function () { if (UI.local === 'skills' || UI.local === 'recipes') UI.renderLocal(); }, 'ui');
   Bus.on('saber', function () { if (UI.local === 'recipes' || UI.local === 'craft') UI.renderLocal(); }, 'ui');
   Bus.on('repaired', function () { UI.refreshQuickbar(); }, 'ui');
+  Bus.on('equip', function () { UI.refreshQuickbar(); }, 'ui');
   Bus.on('broke', function () { UI.refreshQuickbar(); UI.refreshHUD(); }, 'ui');
   Bus.on('help:progress', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');
   Bus.on('help:accepted', function () { if (S.panel && S.panel.type === 'helpTask') UI.renderPanel(); }, 'ui');

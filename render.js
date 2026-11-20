@@ -1,16 +1,21 @@
 /* ============================================================
-KANATO DE JOTUN · render.js — Renderer isométrico v3 (512²)
-ARCHIVO EN 4 PARTES CONCATENABLES: 9A · 9B · 9C · 9D
-9A abre el IIFE; 9D lo cierra. No insertes nada entre ellas.
+KANATO DE JOTUN · render.js — Renderer isométrico v5 (512²)
+ARCHIVO EN 2 PARTES CONCATENABLES: 12A · 12B
+12A abre el IIFE; 12B lo cierra. No insertes nada entre ellas.
 
-· Terreno horneado por chunks con LRU y precarga de un chunk por
-  fotograma; calidad y resolución interna adaptativas.
-· Parcelas comprables con color de tierra NATURAL; solo el suelo
-  arado y las granjas NPC se ven como labor.
-· Atlas procedural: 21 nodos, 24 cultivos por forma, casas,
-  estaciones (horno, yunque, telar, potro, molino, alambique),
-  camas, defensas, guardianes y edificios de ciudad nuevos.
-· Entidades delegadas en CR.Art (criaturas y personas con equipo).
+CAMBIOS v5:
+· AVISOS NO INVASIVOS: el render consume los canales 'ticker'
+  (rutina de una línea) y 'toast' (hitos importantes) definidos
+  en systems.js v5. Los mensajes de pesca, recolección y tameo
+  ya no apilan toasts que tapan la pantalla.
+· HUD DE PESCA COMPACTO: la caña muestra solo una barra de
+  progreso sobre el agua, sin texto superpuesto.
+· BARRA DE DOMA SOBRE LA CRIATURA: muestra método, progreso y
+  lo que falta (comida/dardo/vínculo) en un solo glifo.
+· TINTA DE RUTINA: los mensajes de "tierra arada", "cultivo
+  regado", "+1 madera" se escriben como ticker discreto.
+Depende de core, data, world, entities, art. Se carga antes
+de ui.js.
 ============================================================ */
 (function () {
 'use strict';
@@ -28,7 +33,6 @@ const _rgbCache = Object.create(null);
 function rgb(hex) {
   let v = _rgbCache[hex];
   if (v) return v;
-  /* Acepta también 'rgb(r,g,b)' (lo devuelven mix/shade): antes se leía como 0 → negro */
   if (typeof hex === 'string' && hex.charCodeAt(0) === 114) {
     const m = hex.match(/[\d.]+/g);
     if (m && m.length >= 3) return { r: Math.round(+m[0]), g: Math.round(+m[1]), b: Math.round(+m[2]) };
@@ -37,8 +41,7 @@ function rgb(hex) {
   if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
   const n = parseInt(h, 16) || 0;
   v = { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
-  _rgbCache[hex] = v;
-  return v;
+  _rgbCache[hex] = v; return v;
 }
 function shade(hex, amt) {
   const c = rgb(hex);
@@ -65,7 +68,8 @@ const R = CR.Render = {
   vw: 0, vh: 0, dpr: 1, zoom: 1, quality: 1,
   time: 0, shake: 0, shakeX: 0, shakeY: 0,
   interact: null, _hintT: 0, _miniT: 0, _fpsAcc: 0, _fpsN: 0,
-  ready: false, _lost: false, _mapDirty: true, _rs: 1, _rsUp: 0
+  ready: false, _lost: false, _mapDirty: true, _rs: 1, _rsUp: 0,
+  _ticker: null, _tickerT: 0
 };
 const Cam = CR.Camera = { x: 256, y: 256, tx: 256, ty: 256, sx: 0, sy: 0 };
 const chunkCache = new Map();
@@ -74,7 +78,7 @@ let CHUNK_MAX = 22, CHUNK_BASE = 22;
 const visBuf = [];
 const CH = C.CHUNK, COX = CH * HW, CPAD = 18;
 const CW = CH * TW, CHT = CH * TH + CPAD;
-const CKEY = 64;                                  /* 512/16 = 32 ≤ 64 */
+const CKEY = 64;
 const atlas = { nodes: {}, buildings: {}, crops: {}, wall: null, gate: {} };
 let lightCv = null, lightCtx = null, mapCv = null, mapCtx = null;
 
@@ -92,7 +96,7 @@ function sprite(w, h, fn) {
 }
 function ellipse(g, x, y, rx, ry, fill) {
   g.beginPath(); g.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, U.TAU);
-  g.fillStyle = fill; g.fill();
+  if (fill) { g.fillStyle = fill; g.fill(); }
 }
 function poly(g, pts, fill, stroke, lw) {
   if (!pts.length) return;
@@ -108,12 +112,11 @@ function line(g, x0, y0, x1, y1, col, w) {
   g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
 }
 
-/* ---------- Nodos de recurso (21 claves) ---------- */
+/* ---------- Nodos de recurso ---------- */
 function makeNode(key, variant) {
   const def = D.NODES[key];
   const tint = (def && def.tint) || '#8a8a82';
   const rnd = CR.RNG(U.hashStr(key + variant));
-
   if (key === 'tree' || key === 'apple_tree') {
     return sprite(76, 104, function (g, w, h) {
       const cx = w / 2, base = h - 8;
@@ -138,7 +141,6 @@ function makeNode(key, variant) {
       }
     });
   }
-
   if (key === 'dead_tree') {
     return sprite(70, 96, function (g, w, h) {
       const cx = w / 2, base = h - 8;
@@ -154,7 +156,6 @@ function makeNode(key, variant) {
       ellipse(g, cx, base - th, 3.4, 2.4, shade(tint, -0.3));
     });
   }
-
   if (key === 'crystal_node') {
     return sprite(64, 68, function (g, w, h) {
       const cx = w / 2, base = h - 8;
@@ -169,12 +170,11 @@ function makeNode(key, variant) {
       }
     });
   }
-
   if (key === 'ice_node') {
     return sprite(62, 62, function (g, w, h) {
       const cx = w / 2, base = h - 8;
       contactShadow(g, cx, base, 16, 6);
-      poly(g, [[cx - 17, base], [cx - 18, base - 7], [cx - 6, base - 13], [cx + 8, base - 12], [cx + 18, base - 5], [cx + 15, base]], '#c8dce8', '#8aa8bc', 1.2);
+      poly(g, [[cx - 17, base], [cx - 18, base - 7], [cx - 4, base - 13], [cx + 5, base - 9], [cx + 11, base - 1], [cx + 8, base]], '#c8dce8', '#8aa8bc', 1.2);
       g.save(); g.globalAlpha = 0.32; ellipse(g, cx, base - 16, 17, 12, tint); g.restore();
       for (let i = 0; i < 4; i++) {
         const px = cx - 11 + i * 7, hh = 16 + rnd.next() * 14;
@@ -183,7 +183,6 @@ function makeNode(key, variant) {
       }
     });
   }
-
   if (key === 'clay_patch' || key === 'sand_patch') {
     const clay = key === 'clay_patch';
     return sprite(56, 40, function (g, w, h) {
@@ -193,8 +192,8 @@ function makeNode(key, variant) {
       ellipse(g, cx - 3, base - 6, 12, 5, shade(tint, 0.16));
       ellipse(g, cx + 6, base - 4, 8, 3.4, shade(tint, -0.12));
       if (clay) {
-        g.save(); g.globalAlpha = 0.35; ellipse(g, cx - 4, base - 7, 6, 2.2, '#e8d0c0'); g.restore();
-        for (let i = 0; i < 3; i++) ellipse(g, cx - 8 + i * 8, base - 2, 3, 1.6, shade(tint, -0.22));
+        g.save(); g.globalAlpha = 0.4; ellipse(g, cx - 4, base - 7, 6, 2.2, '#e0c0a8'); g.restore();
+        for (let i = -1; i <= 1; i++) curve(g, -8, 3 + i * 2.6, 0, 1 + i * 2.6, 8, 3 + i * 2.6, '#8a5e42', 0.7);
       } else {
         g.strokeStyle = shade(tint, -0.16); g.lineWidth = 1;
         for (let i = 0; i < 3; i++) {
@@ -206,7 +205,6 @@ function makeNode(key, variant) {
       }
     });
   }
-
   if (key === 'rock' || key.indexOf('_node') > 0) {
     const ore = key !== 'rock';
     return sprite(64, 62, function (g, w, h) {
@@ -223,11 +221,11 @@ function makeNode(key, variant) {
           poly(g, [[px, py - s], [px + s * 0.7, py], [px, py + s], [px - s * 0.7, py]], tint, shade(tint, 0.45), 1);
           poly(g, [[px, py - s], [px + s * 0.3, py - s * 0.2], [px, py + s * 0.3]], shade(tint, 0.35));
         }
-        g.save(); g.globalAlpha = 0.26; ellipse(g, cx, base - 15, 15, 10, tint); g.restore();
+        g.save(); g.globalAlpha = 0.26; ellipse(g,
+          cx, base - 15, 15, 10, tint); g.restore();
       }
     });
   }
-
   if (key === 'bush') {
     return sprite(52, 46, function (g, w, h) {
       const cx = w / 2, base = h - 8;
@@ -242,7 +240,6 @@ function makeNode(key, variant) {
       }
     });
   }
-
   if (key === 'grass') {
     return sprite(44, 34, function (g, w, h) {
       const cx = w / 2, base = h - 8;
@@ -255,7 +252,6 @@ function makeNode(key, variant) {
       }
     });
   }
-
   if (key === 'herb_plant') {
     return sprite(44, 40, function (g, w, h) {
       const cx = w / 2, base = h - 8;
@@ -267,7 +263,6 @@ function makeNode(key, variant) {
       }
     });
   }
-
   /* honey_node */
   return sprite(58, 66, function (g, w, h) {
     const cx = w / 2, base = h - 8;
@@ -279,7 +274,7 @@ function makeNode(key, variant) {
   });
 }
 
-/* ---------- Cultivos: 3 etapas y forma propia por tipo ---------- */
+/* ---------- Cultivos ---------- */
 const CROP_COL = {
   wheat: '#d8c060', carrot: '#e07830', potato: '#c8a060', tomato: '#d84040', pumpkin: '#e08828',
   onion: '#d8b8c8', lettuce: '#8ad060', garlic: '#e8e0d0', corn: '#e8c840', cabbage: '#8ac870',
@@ -287,6 +282,51 @@ const CROP_COL = {
   sunflower: '#f0c020', strawberry: '#e04060', grape: '#7a48a8', melon: '#a8d070', cotton: '#f4f4f0',
   flax: '#8ab8d8', herb: '#4aae7a', bean: '#7ab84a', beet: '#a8306a'
 };
+const CROP_FORM = {
+  wheat: 'grain', carrot: 'root', potato: 'root', tomato: 'fruit', pumpkin: 'fruit',
+  onion: 'bulb', lettuce: 'leaf', garlic: 'bulb', corn: 'grain', cabbage: 'leaf',
+  pepper: 'fruit', sweetpotato: 'root', rice: 'grain', quinoa: 'grain', maca: 'root',
+  sunflower: 'seedpod', strawberry: 'fruit', grape: 'vine', melon: 'fruit', cotton: 'fiber',
+  flax: 'fiber', herb: 'leaf', bean: 'vine', beet: 'root'
+};
+function cropHead(g, id, col, form) {
+  if (form === 'grain') {
+    for (let i = -1; i <= 1; i++) {
+      stroke(g, [[i * 4, 6], [i * 4.4, -6]], shade(col, -0.2), 1.4);
+      for (let k = 0; k < 4; k++) ellipse(g, i * 4.4, -7 - k * 2.4, 2, 1.4, shade(col, k % 2 ? 0.1 : -0.08));
+    }
+  } else if (form === 'root') {
+    blob(g, 0, 3, 6.4, 8, col, shade(col, 0.16));
+    curve(g, 0, 10, 1, 13, -1, 15, shade(col, -0.3), 1.4);
+    for (let k = -1; k <= 1; k++) stroke(g, [[0, -5], [k * 6, -12]], '#5a9a3a', 1.6);
+  } else if (form === 'bulb') {
+    blob(g, 0, 3, 7, 7.4, col, shade(col, 0.18));
+    stroke(g, [[-2.4, 8], [-2, -3]], shade(col, -0.18), 0.8);
+    stroke(g, [[2.4, 8], [2, -3]], shade(col, -0.18), 0.8);
+    for (let k = -1; k <= 1; k++) stroke(g, [[0, -4], [k * 4.4, -11]], '#7a9a4a', 1.3);
+  } else if (form === 'leaf') {
+    for (let i = 0; i < 7; i++) { const a = i / 7 * U.TAU; ellipse(g, cos(a) * 5.4, sin(a) * 4.4, 5, 4.4, i % 2 ? col : shade(col, 0.14)); }
+    ellipse(g, 0, 0, 5.4, 4.6, shade(col, 0.26));
+    curve(g, -3, 3, 0, -1, 3, 3, shade(col, -0.2), 0.8);
+  } else if (form === 'seedpod') {
+    for (let i = 0; i < 8; i++) { const a = i / 8 * U.TAU; ellipse(g, cos(a) * 5, sin(a) * 5, 2.6, 2, col, shade(col, -0.2), 0.4); }
+    ellipse(g, 0, 0, 3.4, 3.4, '#6a4a20');
+    stroke(g, [[0, -8], [0, -13]], '#5a9a3a', 1.4);
+  } else if (form === 'vine') {
+    curve(g, -6, -8, 0, 0, 6, -6, '#4a8a30', 1.6);
+    for (let i = 0; i < 4; i++) {
+      const t2 = i / 3, x = U.lerp(-6, 6, t2), y = -8 + sin(t2 * PI) * 8;
+      ellipse(g, x, y + 2, 3, 3.6, col, shade(col, -0.3), 0.6);
+    }
+  } else if (form === 'fiber') {
+    for (let i = 0; i < 5; i++) { const a = i / 5 * U.TAU; ellipse(g, cos(a) * 4.4, sin(a) * 4 - 1, 4.4, 4, col, shade(col, -0.15), 0.5); }
+    ellipse(g, 0, -1, 4.4, 4, shade(col, 0.2), shade(col, -0.1), 0.5);
+  } else {
+    blob(g, 0, 2, 8, 7.6, col, shade(col, 0.2));
+    stroke(g, [[0, -5], [0, -9]], '#4a8a30', 1.6);
+    path(g, [[0, -8], [5, -10], [3, -6]], '#5aa04a', '#3a7a2a', 0.5);
+  }
+}
 function makeCrop(cropId, stage) {
   const cd = D.CROPS[cropId];
   const form = (cd && cd.form) || 'fruit';
@@ -359,7 +399,79 @@ function makeCrop(cropId, stage) {
   });
 }
 
-/* ---------- Edificios: caja isométrica + detalles por tipo y clave ---------- */
+/* ---------- Edificios ---------- */
+function houseBld(wall, roof, detail) {
+  return function (g) {
+    shadow(g, 12, 11);
+    path(g, [[-11, 10], [-11, -2], [11, -2], [11, 10]], wall, shade(wall, -0.4), 1);
+    path(g, [[-13, -2], [0, -12], [13, -2]], roof, shade(roof, -0.4), 1);
+    path(g, [[-13, -2], [0, -12], [0, -2]], shade(roof, 0.16));
+    rr(g, -3, 2, 6, 8, 1, '#5a3a20', '#3a2410', 0.7);
+    ellipse(g, 1.6, 6, 0.8, 0.8, '#e0c060');
+    rr(g, -9, 1, 4, 4, 0.8, '#8fc8e0', shade(wall, -0.4), 0.6);
+    rr(g, 5, 1, 4, 4, 0.8, '#8fc8e0', shade(wall, -0.4), 0.6);
+    if (detail) detail(g);
+  };
+}
+function shadow(g, y, rx) { g.save(); g.globalAlpha = 0.22; ellipse(g, 0, y === undefined ? 12 : y, rx || 9, 2.6, '#000'); g.restore(); }
+function curve(g, x0, y0, cx, cy, x1, y1, col, w) {
+  g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo(cx, cy, x1, y1); g.stroke();
+}
+function rr(g, x, y, w, h, r, fill, strokeC, lw) {
+  r = Math.min(r, w / 2, h / 2);
+  g.beginPath();
+  g.moveTo(x + r, y); g.lineTo(x + w - r, y); g.arcTo(x + w, y, x + w, y + r, r);
+  g.lineTo(x + w, y + h - r); g.arcTo(x + w, y + h, x + w - r, y + h, r);
+  g.lineTo(x + r, y + h); g.arcTo(x, y + h, x, y + h - r, r);
+  g.lineTo(x, y + r); g.arcTo(x, y, x + r, y, r); g.closePath();
+  if (fill) { g.fillStyle = fill; g.fill(); }
+  if (strokeC) { g.strokeStyle = strokeC; g.lineWidth = lw || 0.8; g.stroke(); }
+}
+function stroke(g, pts, col, w) {
+  g.strokeStyle = col; g.lineWidth = w; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+  g.stroke();
+}
+function blob(g, x, y, rx, ry, col, hi, strokeC) {
+  ellipse(g, x, y, rx, ry, col, strokeC || shade(col, -0.42), 0.9);
+  if (hi !== null && hi !== undefined) {
+    g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, U.TAU); g.clip();
+    ellipse(g, x - rx * 0.24, y - ry * 0.40, rx * 0.74, ry * 0.52, hi || shade(col, 0.20));
+    ellipse(g, x + rx * 0.30, y + ry * 0.52, rx * 0.70, ry * 0.42, shade(col, -0.20));
+    g.restore();
+  }
+}
+function glow(g, x, y, r, col, a) {
+  g.save(); g.globalAlpha = a === undefined ? 0.35 : a;
+  const gr = g.createRadialGradient(x, y, 0, x, y, r);
+  gr.addColorStop(0, rgba(col, 0.9)); gr.addColorStop(1, rgba(col, 0));
+  g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, U.TAU); g.fill(); g.restore();
+}
+function gem(g, x, y, r, col) {
+  path(g, [[x, y - r], [x + r * 0.72, y], [x, y + r], [x - r * 0.72, y]], col, shade(col, -0.4), 0.7);
+  path(g, [[x, y - r], [x + r * 0.34, y - r * 0.2], [x, y + r * 0.3], [x - r * 0.34, y - r * 0.2]], shade(col, 0.35));
+}
+function horn(g, x, y, len, ang, w, col, bend) {
+  const mx = x + Math.cos(ang) * len * 0.55 + (bend || 0);
+  const my = y + Math.sin(ang) * len * 0.55;
+  const ex = x + Math.cos(ang) * len + (bend || 0) * 1.6;
+  const ey = y + Math.sin(ang) * len;
+  g.strokeStyle = col; g.lineCap = 'round';
+  g.lineWidth = w; g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(mx, my, ex, ey); g.stroke();
+  g.lineWidth = w * 0.4; g.strokeStyle = shade(col, 0.3);
+  g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(mx, my, ex, ey); g.stroke();
+}
+function spots(g, x, y, rx, ry, n, col, seed, r) {
+  g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, U.TAU); g.clip();
+  for (let i = 0; i < n; i++) {
+    const a = ((Math.sin((i + seed) * 78.233) * 43758.5453) % 1 + 1) % 1;
+    const b = ((Math.sin((i + seed) * 12.9898) * 24634.6345) % 1 + 1) % 1;
+    ellipse(g, x - rx + a * rx * 2, y - ry + b * ry * 2, r * (0.6 + a * 0.7), r * (0.5 + b * 0.6), col);
+  }
+  g.restore();
+}
 function makeBuilding(key, w, h, info) {
   const kind = info.kind || 'house';
   const wallCol = info.wall || '#b0a080', roofCol = info.roof || '#8a6a4a';
@@ -384,37 +496,26 @@ function makeBuilding(key, w, h, info) {
     const Tu = up(T), Ru = up(Rp), Bu = up(B), Lu = up(L);
     g.save();
     ellipse(g, B[0], B[1] - 4, BW * 0.42, BH * 0.3, 'rgba(0,0,0,0.24)');
-
-    /* Vallas y corrales */
     if (kind === 'fence' || kind === 'pen') {
       const posts = [];
       for (let i = 0; i <= w; i++) posts.push([OX + i * HW, OY + i * HH]);
       for (let i = 0; i <= h; i++) posts.push([OX - i * HW, OY + i * HH]);
-      for (let i = 0; i <= w; i++) posts.push([OX - h * HW + i * HW, OY + h * HH + i * HH]);
-      for (let i = 0; i <= h; i++) posts.push([OX + w * HW - i * HW, OY + w * HH + i * HH]);
       g.strokeStyle = shade(wallCol, -0.25); g.lineWidth = 3;
       g.beginPath();
       g.moveTo(T[0], T[1] - 12); g.lineTo(Rp[0], Rp[1] - 12); g.lineTo(B[0], B[1] - 12); g.lineTo(L[0], L[1] - 12);
       g.closePath(); g.stroke();
-      g.beginPath();
-      g.moveTo(T[0], T[1] - 6); g.lineTo(Rp[0], Rp[1] - 6); g.lineTo(B[0], B[1] - 6); g.lineTo(L[0], L[1] - 6);
-      g.closePath(); g.stroke();
       for (let i = 0; i < posts.length; i++) {
         const p = posts[i];
         g.fillStyle = wallCol; g.fillRect(p[0] - 2.5, p[1] - 18, 5, 18);
-        g.fillStyle = shade(wallCol, -0.3); g.fillRect(p[0] - 2.5, p[1] - 18, 2, 18);
-        g.fillStyle = shade(wallCol, 0.2); g.fillRect(p[0] - 2.5, p[1] - 18, 5, 2);
       }
       g.restore(); return;
     }
-
-    /* Fuego: fogata, antorcha y farol */
     if (kind === 'fire') {
       const fy = OY + BH * 0.5;
       if (key === 'torch_post' || key === 'lantern_post') {
         line(g, OX, fy + 4, OX, fy - 30, '#6a4a2a', 4);
         if (key === 'lantern_post') {
-          poly(g, [[OX - 6, fy - 34], [OX + 6, fy - 34], [OX + 5, fy - 22], [OX - 5, fy - 22]], '#c8a060', '#8a6a28', 1.2);
+          rr(g, OX - 6, fy - 34, 12, 12, 1.4, '#c8a060', '#8a6a28', 1.2);
           ellipse(g, OX, fy - 28, 3.4, 4.4, '#ffd070');
         } else {
           ellipse(g, OX, fy - 33, 4.4, 6, '#ff8a30');
@@ -425,15 +526,12 @@ function makeBuilding(key, w, h, info) {
         for (let i = 0; i < 7; i++) {
           const a = i / 7 * U.TAU;
           ellipse(g, OX + cos(a) * 15, fy + sin(a) * 7, 4, 3, '#8a8478');
-          ellipse(g, OX + cos(a) * 15 - 1, fy + sin(a) * 7 - 1, 2, 1.4, '#a8a298');
         }
         line(g, OX - 9, fy + 3, OX + 9, fy - 3, '#5a3a20', 4);
         line(g, OX - 8, fy - 3, OX + 8, fy + 3, '#5a3a20', 4);
       }
       g.restore(); return;
     }
-
-    /* Camas colocables */
     if (kind === 'bed') {
       poly(g, [T, Rp, B, L], shade(wallCol, -0.2), shade(wallCol, -0.4), 1.2);
       poly(g, [Tu, Ru, Bu, Lu], wallCol, shade(wallCol, -0.35), 1.2);
@@ -442,8 +540,6 @@ function makeBuilding(key, w, h, info) {
       ellipse(g, (Tu[0] + mx) / 2, (Tu[1] + my) / 2, 8, 4.4, '#f4ecd8');
       g.restore(); return;
     }
-
-    /* Fuente y pozo */
     if (kind === 'fountain') {
       poly(g, [T, Rp, B, L], '#9aa2aa', '#6a727a', 1.5);
       poly(g, [Tu, Ru, Bu, Lu], '#b8c0c8', '#7a828a', 1.5);
@@ -457,22 +553,17 @@ function makeBuilding(key, w, h, info) {
         line(g, OX - 10, OY - WH - 4, OX - 10, OY - WH - 26, '#6a4a2a', 3);
         line(g, OX + 10, OY - WH - 4, OX + 10, OY - WH - 26, '#6a4a2a', 3);
         poly(g, [[OX - 14, OY - WH - 26], [OX, OY - WH - 34], [OX + 14, OY - WH - 26]], '#8a5a3a', '#5a3a20', 1);
-        line(g, OX, OY - WH - 26, OX, OY - WH - 12, '#8a7050', 1.2);
-        poly(g, [[OX - 4, OY - WH - 12], [OX + 4, OY - WH - 12], [OX + 3, OY - WH - 5], [OX - 3, OY - WH - 5]], '#8a6a44', '#5a4420', 1);
       } else {
         g.fillStyle = '#c8d0d8'; g.fillRect(OX - 3, OY - WH - 16, 6, 18);
         ellipse(g, OX, OY - WH - 18, 7, 4, '#d8e0e8');
       }
       g.restore(); return;
     }
-
-    /* Muros */
     poly(g, [L, B, Bu, Lu], shade(wallCol, -0.28), shade(wallCol, -0.45), 1);
     poly(g, [B, Rp, Ru, Bu], shade(wallCol, -0.06), shade(wallCol, -0.3), 1);
-
-    /* Tejado */
+    /* ---------- Tejado ---------- */
     if (RH > 0) {
-      const apex = [OX + (w - h) * HW * 0.5, OY - WH - RH + BH * 0.25];
+      const apex = [OX + (w - h) * HW * 0.5, OY + BH * 0.5 - WH - RH];
       if (kind === 'wall' || kind === 'gate') {
         poly(g, [Tu, Ru, Bu, Lu], shade(wallCol, 0.12), shade(wallCol, -0.3), 1);
         const n = Math.max(2, Math.round((w + h) * 1.5));
@@ -493,11 +584,10 @@ function makeBuilding(key, w, h, info) {
     } else {
       poly(g, [Tu, Ru, Bu, Lu], shade(wallCol, 0.1), shade(wallCol, -0.3), 1);
     }
-
     const faceX = (B[0] + Rp[0]) / 2, faceY = (B[1] + Rp[1]) / 2 - WH * 0.5;
-    const apexY = OY - WH - RH + BH * 0.25;
+    const apexY = OY + BH * 0.5 - WH - RH;
 
-    /* Puerta y ventanas */
+    /* ---------- Puerta y ventanas ---------- */
     if (kind === 'house' || kind === 'smithy' || kind === 'steward' || kind === 'barracks' ||
         kind === 'bank' || kind === 'church' || kind === 'forge') {
       const dw = Math.min(14, w * 5), dh = WH * 0.62;
@@ -506,7 +596,8 @@ function makeBuilding(key, w, h, info) {
       ellipse(g, faceX + dw / 2 - 3, faceY + WH * 0.5 - dh * 0.5, 1.4, 1.4, '#e0c060');
       const wl = [L[0] + (B[0] - L[0]) * 0.35, L[1] + (B[1] - L[1]) * 0.35 - WH * 0.62];
       const wr = [L[0] + (B[0] - L[0]) * 0.68, L[1] + (B[1] - L[1]) * 0.68 - WH * 0.62];
-      g.fillStyle = (kind === 'church' || key === 'alchemy_hut' || key === 'alchemy') ? '#e8a040' : '#8fc8e0';
+      const winCol = (kind === 'church' || key === 'alchemy_hut' || key === 'alchemy') ? '#e8a040' : '#8fc8e0';
+      g.fillStyle = winCol;
       g.fillRect(wl[0] - 4, wl[1], 8, 8); g.fillRect(wr[0] - 4, wr[1], 8, 8);
       g.strokeStyle = shade(wallCol, -0.4); g.lineWidth = 1;
       g.strokeRect(wl[0] - 4, wl[1], 8, 8); g.strokeRect(wr[0] - 4, wr[1], 8, 8);
@@ -515,7 +606,7 @@ function makeBuilding(key, w, h, info) {
       g.moveTo(wr[0], wr[1]); g.lineTo(wr[0], wr[1] + 8); g.moveTo(wr[0] - 4, wr[1] + 4); g.lineTo(wr[0] + 4, wr[1] + 4);
       g.stroke();
     }
-
+    /* ---------- Detalles por tipo ---------- */
     if (kind === 'church') {
       g.fillStyle = '#e8dcb0'; g.fillRect(OX - 2, apexY - 22, 4, 22);
       ellipse(g, OX, apexY - 24, 5, 5, '#e07a3a');
@@ -525,7 +616,6 @@ function makeBuilding(key, w, h, info) {
         line(g, OX + cos(a) * 6, apexY - 24 + sin(a) * 6, OX + cos(a) * 8.6, apexY - 24 + sin(a) * 8.6, '#e8c040', 1.4);
       }
     }
-
     if (kind === 'barracks') {
       const bx = faceX + 12, by = (B[1] + Rp[1]) / 2 - WH;
       g.fillStyle = '#8a3a2a'; g.fillRect(bx, by, 10, 20);
@@ -535,7 +625,6 @@ function makeBuilding(key, w, h, info) {
         poly(g, [[OX, apexY - 16], [OX + 12, apexY - 12], [OX, apexY - 8]], '#c0392b', '#8a2418', 1);
       }
     }
-
     if (kind === 'bank') {
       for (let i = 0; i < 3; i++) {
         const px = L[0] + (B[0] - L[0]) * (0.25 + i * 0.25), py = L[1] + (B[1] - L[1]) * (0.25 + i * 0.25);
@@ -549,7 +638,6 @@ function makeBuilding(key, w, h, info) {
         g.beginPath(); g.arc(OX, apexY - 8, 6, 0, U.TAU); g.stroke();
       }
     }
-
     if (kind === 'smithy' || kind === 'forge') {
       const chx = OX + w * HW * 0.45, chy = OY - WH - RH * 0.5;
       g.fillStyle = '#6a5a50'; g.fillRect(chx - 5, chy - 14, 10, 20);
@@ -565,7 +653,6 @@ function makeBuilding(key, w, h, info) {
         ellipse(g, OX, OY - WH - 2, 5, 3.4, '#ff8a30');
       }
     }
-
     if (kind === 'stall') {
       const aw = [[Tu[0], Tu[1] - 6], [Ru[0], Ru[1] - 6], [Bu[0], Bu[1] - 6], [Lu[0], Lu[1] - 6]];
       for (let i = 0; i < 6; i++) {
@@ -588,15 +675,11 @@ function makeBuilding(key, w, h, info) {
         poly(g, [[OX - 14, OY + BH * 0.7 - 6], [OX + 14, OY + BH * 0.7 - 6], [OX + 12, OY + BH * 0.7 - 14], [OX - 12, OY + BH * 0.7 - 14]], '#a08850', '#6a5430', 1);
       }
     }
-
     if (kind === 'chest') {
       g.fillStyle = '#c8a040'; g.fillRect(OX - 8, OY - WH + 2, 16, 3);
       g.fillStyle = '#e8c040'; g.fillRect(OX - 2.5, OY - WH + 1, 5, 7);
       ellipse(g, OX, OY - WH * 0.5, 2, 2, '#e8d080');
     }
-
-    /* Bancos especializados: pilón, gárgola, espantapájaros, telar,
-       potro, mesa de flechas, molino y banco genérico */
     if (kind === 'bench') {
       if (key === 'golem_pylon') {
         poly(g, [[OX - 7, OY - WH + 2], [OX + 7, OY - WH + 2], [OX + 5, OY - WH - 30], [OX - 5, OY - WH - 30]], wallCol, shade(wallCol, -0.4), 1.2);
@@ -613,7 +696,7 @@ function makeBuilding(key, w, h, info) {
         line(g, OX, OY - WH + 4, OX, OY - WH - 26, '#8a6a3a', 3);
         line(g, OX - 11, OY - WH - 18, OX + 11, OY - WH - 18, '#8a6a3a', 2.4);
         ellipse(g, OX, OY - WH - 30, 5, 5.4, '#d8b860');
-        poly(g, [[OX - 7, OY - WH - 33], [OX + 7, OY - WH - 33], [OX + 5, OY - WH - 37], [OX - 5, OY - WH - 37]], '#a08840');
+        poly(g, [[OX - 7, OY - WH - 33], [OX + 7, OY - WH - 33], [OX + 5, OY - WH - 37], [OX - 5, OY - WH - 37]], '#a08840', '#6a5428', 1);
         ellipse(g, OX - 1.6, OY - WH - 30, 0.9, 0.9, '#3a2a1a');
         ellipse(g, OX + 1.6, OY - WH - 30, 0.9, 0.9, '#3a2a1a');
       } else if (key === 'loom') {
@@ -640,7 +723,6 @@ function makeBuilding(key, w, h, info) {
         ellipse(g, OX + 6, OY - WH - 3, 4, 2.5, '#a07840');
       }
     }
-
     if (key === 'alchemy' || key === 'alchemy_hut') {
       for (let i = 0; i < 3; i++) {
         const bx = OX - 8 + i * 8, by = OY - WH - 2;
@@ -648,19 +730,16 @@ function makeBuilding(key, w, h, info) {
         ellipse(g, bx, by - 2, 2, 2.4, ['#8ae04a', '#d0342c', '#8fd0f0'][i]);
       }
     }
-
     if (key === 'inn') {
       line(g, faceX + 16, faceY - 6, faceX + 16, faceY - 20, '#6a4a2a', 2);
       poly(g, [[faceX + 16, faceY - 20], [faceX + 30, faceY - 17], [faceX + 16, faceY - 12]], '#c8a060', '#8a6a28', 1);
     }
-
     if (key === 'hunter_lodge') {
       line(g, faceX - 14, faceY - 10, faceX - 20, faceY - 22, '#d8ccb0', 2);
       line(g, faceX - 20, faceY - 22, faceX - 26, faceY - 26, '#d8ccb0', 1.6);
       line(g, faceX - 14, faceY - 10, faceX - 8, faceY - 22, '#d8ccb0', 2);
       line(g, faceX - 8, faceY - 22, faceX - 2, faceY - 26, '#d8ccb0', 1.6);
     }
-
     if (kind === 'gate') {
       g.clearRect(OX - HW * 0.55, OY - WH * 0.8, HW * 1.1, WH * 0.8 + BH * 0.5);
       g.fillStyle = shade(wallCol, -0.35);
@@ -675,7 +754,6 @@ function makeBuilding(key, w, h, info) {
   cv._ox = OX; cv._oy = OY;
   return cv;
 }
-
 function buildAtlas() {
   const keys = Object.keys(D.NODES);
   for (let i = 0; i < keys.length; i++) atlas.nodes[keys[i]] = [makeNode(keys[i], 0), makeNode(keys[i], 1), makeNode(keys[i], 2)];
@@ -691,7 +769,6 @@ function buildingSprite(key, w, h, info) {
   if (!s) { s = makeBuilding(key, w, h, info || { kind: 'house' }); atlas.buildings[ck] = s; }
   return s;
 }
-
 /* ==========================================================
 4 · BAKE DE TERRENO POR CHUNKS
 ========================================================== */
@@ -722,7 +799,6 @@ function bakeChunk(cx, cy) {
       else if (f & W.F.FARM) col = mix('#8a6a44', '#9a7a52', hv);
       else {
         col = hv > 0.5 ? bio.base : bio.alt;
-        /* Parcelas comprables: tierra de color NATURAL, apenas más cálida */
         if (f & W.F.PARCEL) col = mix(col, '#9a7f52', 0.16);
         col = shade(col, U.clamp((el - 110) / 145, -0.4, 0.4) * 0.28);
         if (f & W.F.ZONE) {
@@ -815,7 +891,6 @@ function updateCamera(dt) {
   const p = E.player;
   if (p) {
     Cam.tx = p.t.x; Cam.ty = p.t.y;
-    /* Anticipación: la cámara se adelanta hacia donde miras */
     if (p.mount && p.mount.tg.flying) { Cam.tx += cos(p.t.ang) * 1.3; Cam.ty += sin(p.t.ang) * 1.3; }
     if (p.isBow && p.act && p.act.kind === 'draw') { Cam.tx += cos(p.t.ang) * 0.9; Cam.ty += sin(p.t.ang) * 0.9; }
   } else if (W.ready && W.city) {
@@ -833,7 +908,6 @@ function updateCamera(dt) {
     R.shakeY = sin(a * 1.37) * R.shake * 0.7;
   } else { R.shake = 0; R.shakeX = 0; R.shakeY = 0; }
 }
-
 /* ==========================================================
 6 · PARTÍCULAS Y FLOATERS (pooled, cero GC en régimen)
 ========================================================== */
@@ -873,7 +947,6 @@ function burst(x, y, kind, col, n, opts) {
   for (let i = 0; i < n; i++) spawnPart(x, y, kind, col, opts);
 }
 R.burst = burst;
-
 const FX = {
   wood: function (d) { burst(d.x, d.y, 'chip', (d.extra && d.extra.tint) || '#8a5a30', 7, { z: 0.5, size: 3 }); },
   stone: function (d) { burst(d.x, d.y, 'chip', (d.extra && d.extra.tint) || '#9a968c', 7, { z: 0.4, size: 3 }); },
@@ -998,7 +1071,6 @@ function drawParts(g) {
       g.beginPath(); g.ellipse(sx, sy, rr, rr * 0.5, 0, 0, U.TAU); g.stroke();
       if (p.kind === 'tele') {
         g.fillStyle = 'rgba(255,90,58,0.10)'; g.fill();
-        /* Anillo interior que se cierra: cuenta atrás del golpe */
         g.strokeStyle = 'rgba(255,160,130,' + (0.55 * a) + ')'; g.lineWidth = 2 * R.zoom;
         g.beginPath(); g.ellipse(sx, sy, rr * (1 - a), rr * 0.5 * (1 - a), 0, 0, U.TAU); g.stroke();
       }
@@ -1022,493 +1094,456 @@ function drawFloats(g) {
     g.globalAlpha = 1;
   }
 }
-
 /* ==========================================================
 7 · ENTIDADES · arte propio + overlays de combate
 ========================================================== */
 function ellipseShadow(g, sx, sy, r, alpha) { ellipse(g, sx, sy, r, r * 0.45, 'rgba(0,0,0,' + (alpha || 0.28) + ')'); }
-
-/* Fallbacks compactos: solo si CR.Art no pudiera dibujar algo. */
 function fallbackPerson(g, e, sx, sy, s, walk, tint) {
-  const bob = sin(walk * 2) * 1.4 * s, sw = sin(walk * 2) * 3.4 * s;
-  const by = sy - 16 * s + bob, col = tint || '#b0c8e0';
-  ellipseShadow(g, sx, sy, 8 * s);
-  g.fillStyle = shade(col, -0.35);
-  g.fillRect(sx - 4.4 * s, sy - 9 * s + sw * 0.3, 3.2 * s, 9 * s);
-  g.fillRect(sx + 1.2 * s, sy - 9 * s - sw * 0.3, 3.2 * s, 9 * s);
-  poly(g, [[sx - 6 * s, by + 8 * s], [sx + 6 * s, by + 8 * s], [sx + 5 * s, by - 4 * s], [sx - 5 * s, by - 4 * s]], col, shade(col, -0.4), 1);
-  ellipse(g, sx, by - 9 * s, 5.2 * s, 5.4 * s, '#d8b088');
-  const face = cos(e.t.ang) >= 0 ? 1 : -1;
-  ellipse(g, sx + face * 2 * s, by - 9.4 * s, 1 * s, 1 * s, '#2a1a10');
+const bob = sin(walk * 2) * 1.4 * s, sw = sin(walk * 2) * 3.4 * s;
+const by = sy - 16 * s + bob, col = tint || '#b0c8e0';
+ellipseShadow(g, sx, sy, 8 * s);
+g.fillStyle = shade(col, -0.35);
+g.fillRect(sx - 4.4 * s, sy - 9 * s + sw * 0.3, 3.2 * s, 9 * s);
+g.fillRect(sx + 1.2 * s, sy - 9 * s - sw * 0.3, 3.2 * s, 9 * s);
+poly(g, [[sx - 6 * s, by + 8 * s], [sx + 6 * s, by + 8 * s], [sx + 5 * s, by - 4 * s], [sx - 5 * s, by - 4 * s]], col, shade(col, -0.4), 1);
+ellipse(g, sx, by - 9 * s, 5.2 * s, 5.4 * s, '#d8b088');
+const face = cos(e.t.ang) >= 0 ? 1 : -1;
+ellipse(g, sx + face * 2 * s, by - 9.4 * s, 1 * s, 1 * s, '#2a1a10');
 }
 function fallbackBeast(g, e, sx, sy, s, walk, tint) {
-  const bob = sin(walk * 2) * 1.1 * s, sw = sin(walk * 2) * 3.2 * s;
-  const by = sy - 11 * s + bob, face = cos(e.t.ang) >= 0 ? 1 : -1, col = tint || '#8a8a92';
-  ellipseShadow(g, sx, sy, 11 * s);
-  g.fillStyle = shade(col, -0.35);
-  g.fillRect(sx - 7 * s, sy - 7 * s + sw * 0.4, 2.6 * s, 7 * s);
-  g.fillRect(sx + 4 * s, sy - 7 * s - sw * 0.4, 2.6 * s, 7 * s);
-  ellipse(g, sx, by, 11 * s, 7 * s, col);
-  ellipse(g, sx - 2 * s, by - 2 * s, 8 * s, 4.4 * s, shade(col, 0.16));
-  ellipse(g, sx + face * 10 * s, by - 4 * s, 5.4 * s, 4.6 * s, shade(col, 0.06));
-  ellipse(g, sx + face * 12 * s, by - 4.6 * s, 1.1 * s, 1.1 * s, '#1a1008');
+const bob = sin(walk * 2) * 1.1 * s, sw = sin(walk * 2) * 3.2 * s;
+const by = sy - 11 * s + bob, face = cos(e.t.ang) >= 0 ? 1 : -1, col = tint || '#8a8a92';
+ellipseShadow(g, sx, sy, 11 * s);
+g.fillStyle = shade(col, -0.35);
+g.fillRect(sx - 7 * s, sy - 7 * s + sw * 0.4, 2.6 * s, 7 * s);
+g.fillRect(sx + 4 * s, sy - 7 * s - sw * 0.4, 2.6 * s, 7 * s);
+ellipse(g, sx, by, 11 * s, 7 * s, col);
+ellipse(g, sx - 2 * s, by - 2 * s, 8 * s, 4.4 * s, shade(col, 0.16));
+ellipse(g, sx + face * 10 * s, by - 4 * s, 5.4 * s, 4.6 * s, shade(col, 0.06));
+ellipse(g, sx + face * 12 * s, by - 4.6 * s, 1.1 * s, 1.1 * s, '#1a1008');
 }
-
-/** Insignia de "producto listo" dibujada (sin emoji). */
 function readyBadge(g, x, y, z) {
-  const s = 7 * z, pulse = 0.75 + 0.25 * sin(R.time * 5);
-  g.save();
-  g.globalAlpha = 0.35 * pulse; ellipse(g, x, y, s * 1.7, s * 1.7, '#f3cf7a');
-  g.globalAlpha = 1;
-  poly(g, [[x, y - s], [x + s * 0.86, y], [x, y + s], [x - s * 0.86, y]], '#f3cf7a', '#8a6a20', 1.2);
-  g.fillStyle = '#3a2a10';
-  g.fillRect(x - 0.9 * z, y - 3.6 * z, 1.8 * z, 4.4 * z);
-  ellipse(g, x, y + 2.4 * z, 1 * z, 1 * z, '#3a2a10');
-  g.restore();
+const s = 7 * z, pulse = 0.75 + 0.25 * sin(R.time * 5);
+g.save();
+g.globalAlpha = 0.35 * pulse; ellipse(g, x, y, s * 1.7, s * 1.7, '#f3cf7a');
+g.globalAlpha = 1;
+poly(g, [[x, y - s], [x + s * 0.86, y], [x, y + s], [x - s * 0.86, y]], '#f3cf7a', '#8a6a20', 1.2);
+g.fillStyle = '#3a2a10';
+g.fillRect(x - 0.9 * z, y - 3.6 * z, 1.8 * z, 4.4 * z);
+ellipse(g, x, y + 2.4 * z, 1 * z, 1 * z, '#3a2a10');
+g.restore();
 }
-
-/** Telegrafía, estados, guardia/parry, tensado, carga y vendas. */
-function drawCombatOverlay(g, e, sx, sy, s) {
-  const z = R.zoom;
-  const headY = sy - 34 * s;
-  /* Cuenta atrás del golpe enemigo */
-  if (e.an.tele > 0 && e.ai && e.ai.mv) {
-    const total = e.ai.mv.wind || 0.4;
-    const k = U.clamp(1 - e.an.tele / total, 0, 1);
-    const rr = 13 * s;
-    g.strokeStyle = 'rgba(255,90,58,0.85)'; g.lineWidth = 3 * z;
-    g.beginPath(); g.arc(sx, headY - 10 * z, rr, -PI / 2, -PI / 2 + k * U.TAU); g.stroke();
-    g.strokeStyle = 'rgba(255,200,180,0.35)'; g.lineWidth = 1.4 * z;
-    g.beginPath(); g.arc(sx, headY - 10 * z, rr, 0, U.TAU); g.stroke();
-  }
-  /* Estados alterados: puntos de color, sin emojis */
-  const st = [];
-  if (e.cb.bleedT > 0) st.push('#e04b3a');
-  if (e.cb.poisonT > 0) st.push('#7ac04a');
-  if (e.cb.burnT > 0) st.push('#ff8a30');
-  if (e.cb.slowT > 0) st.push('#8fd0f0');
-  if (e.cb.stagger > 0) st.push('#f3cf7a');
-  if (st.length) {
-    const bx = sx - (st.length - 1) * 3.4 * z;
-    for (let i = 0; i < st.length; i++) {
-      ellipse(g, bx + i * 6.8 * z, headY - 22 * z, 2.4 * z, 2.4 * z, st[i]);
-      g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 0.8;
-      g.beginPath(); g.arc(bx + i * 6.8 * z, headY - 22 * z, 2.4 * z, 0, U.TAU); g.stroke();
-    }
-  }
-  /* Sedado: tres Z dibujadas */
-  if (e.tg.sedated > 0) {
-    g.strokeStyle = '#bfe4f5'; g.lineWidth = 1.8 * z; g.lineCap = 'round';
-    for (let i = 0; i < 3; i++) {
-      const zx = sx + 10 * z + i * 6 * z, zy = headY - 14 * z - i * 6 * z, ss = (3 + i) * z;
-      g.beginPath();
-      g.moveTo(zx, zy); g.lineTo(zx + ss, zy); g.lineTo(zx, zy + ss); g.lineTo(zx + ss, zy + ss);
-      g.stroke();
-    }
-  }
-  if (e.type !== 'player') return;
-  /* Guardia: arco frontal; los primeros instantes son parry */
-  if (e.blk && e.blk.on && e.shield) {
-    const arc = e.shield.arc || 1.8;
-    const a0 = e.t.ang - arc * 0.5, a1 = e.t.ang + arc * 0.5;
-    const rr = 20 * s;
-    const parrying = e.blk.t <= (e.parryWindow || 0.2);
-    g.strokeStyle = parrying ? 'rgba(243,207,122,0.95)' : 'rgba(140,200,240,0.7)';
-    g.lineWidth = (parrying ? 5 : 3.4) * z;
-    g.beginPath(); g.ellipse(sx, sy - 8 * s, rr, rr * 0.55, 0, a0, a1); g.stroke();
-    g.strokeStyle = parrying ? 'rgba(255,240,190,0.5)' : 'rgba(190,228,245,0.28)';
-    g.lineWidth = 1.4 * z;
-    g.beginPath(); g.ellipse(sx, sy - 8 * s, rr * 1.14, rr * 0.62, 0, a0, a1); g.stroke();
-  }
-  if (e.parryFlash > 0) {
-    const k = U.clamp(e.parryFlash / 0.35, 0, 1);
-    g.strokeStyle = 'rgba(255,240,190,' + (0.9 * k) + ')'; g.lineWidth = 4 * z * k;
-    g.beginPath(); g.ellipse(sx, sy - 8 * s, (24 + (1 - k) * 20) * s, (12 + (1 - k) * 10) * s, 0, 0, U.TAU); g.stroke();
-  }
-  /* Ventana de contraataque tras esquiva (Agilidad 6) */
-  if (e.counterWindow > 0) {
-    g.strokeStyle = 'rgba(143,224,143,' + (0.5 * U.clamp(e.counterWindow / 0.5, 0, 1)) + ')';
-    g.lineWidth = 2 * z;
-    g.beginPath(); g.ellipse(sx, sy, 16 * s, 8 * s, 0, 0, U.TAU); g.stroke();
-  }
-  /* Medidor de tensado / carga */
-  let meter = 0, mcol = null, label = null;
-  if (e.act && e.act.kind === 'draw') {
-    meter = U.clamp(e.an.draw, 0, 1);
-    mcol = meter > 0.96 ? '#f3cf7a' : '#8fd0f0';
-    label = meter > 0.96 ? 'PLENO' : null;
-  } else if (e.act && e.act.kind === 'charge') {
-    meter = U.clamp(e.an.draw, 0, 1);
-    mcol = meter >= 1 ? '#ffd76a' : '#e0a040';
-    label = meter >= 1 ? 'PESADO' : null;
-  }
-  if (meter > 0) {
-    const bw = 40 * z, bh = 5 * z, bx = sx - bw / 2, by = headY - 30 * z;
-    g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
-    g.fillStyle = mcol; g.fillRect(bx, by, bw * meter, bh);
-    g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(bx + bw * 0.96, by - 2); g.lineTo(bx + bw * 0.96, by + bh + 2); g.stroke();
-    if (label) {
-      g.font = '800 ' + Math.max(8, 9 * z) + 'px system-ui, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillStyle = mcol; g.fillText(label, sx, by - 8 * z);
-    }
-  }
-  /* Aplicación de venda / ungüento */
-  if (e.cast) {
-    const k = U.clamp(e.cast.t / Math.max(0.1, e.cast.dur), 0, 1);
-    const bw = 40 * z, bh = 5 * z, bx = sx - bw / 2, by = headY - 30 * z;
-    g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
-    g.fillStyle = '#8fe08f'; g.fillRect(bx, by, bw * k, bh);
-    const def = D.ITEMS[e.cast.id];
-    g.font = '700 ' + Math.max(8, 9 * z) + 'px system-ui, sans-serif';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillStyle = '#bfe9cd';
-    g.fillText(def ? def.name : 'Aplicando…', sx, by - 8 * z);
-  }
-}
-
-/** Barra de tameo o de vínculo cuando estás cerca. */
+/* v5 · Barra de doma con MÉTODO y progreso visibles */
 function drawTameBar(g, e, sx, sy, s) {
-  const p = E.player;
-  if (!p || e.tg.tamed || !e.species) return;
-  const sd = D.SPECIES[e.species];
-  if (!sd || !sd.tame) return;
-  if (U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) > 16) return;
-  let info = null;
-  try { info = E.tameInfo(p, e); } catch (err) { return; }
-  if (!info) return;
-  const z = R.zoom, by = sy - 46 * s;
-  const prog = e.tg.tameProgress || 0, need = info.need || 1;
-  const bw = 44 * z, bh = 5 * z, bx = sx - bw / 2;
-  if (sd.tame.method === 'bond') {
-    const calm = U.clamp((e.ai.calm || 0) / (sd.tame.calm || 2.4), 0, 1);
-    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
-    g.fillStyle = calm >= 1 ? '#bfe4f5' : '#7a9ac0'; g.fillRect(bx, by, bw * calm, bh);
-  } else if (prog > 0 || e.tg.sedated > 0) {
-    g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
-    g.fillStyle = '#ff8ab0'; g.fillRect(bx, by, bw * U.clamp(prog / need, 0, 1), bh);
-  } else return;
-  g.font = '700 ' + Math.max(8, 9 * z) + 'px system-ui, sans-serif';
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.fillStyle = info.can ? '#f0d8e4' : '#b3a482';
-  g.fillText(sd.tame.method === 'bond' ? 'vínculo' : (prog + '/' + need), sx, by - 7 * z);
+const p = E.player;
+if (!p || e.tg.tamed || !e.species) return;
+const sd = D.SPECIES[e.species];
+if (!sd || !sd.tame) return;
+if (U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) > 16) return;
+let info = null;
+try { info = E.tameInfo(p, e); } catch (err) { return; }
+if (!info) return;
+const z = R.zoom, by = sy - 46 * s;
+const prog = e.tg.tameProgress || 0, need = info.need || 1;
+const bw = 44 * z, bh = 5 * z, bx = sx - bw / 2;
+const method = sd.tame.method;
+const mName = method === 'feed' ? 'COMIDA' : method === 'sedate' ? 'SEDAR' : method === 'bond' ? 'VÍNCULO' : '';
+const mCol = method === 'feed' ? '#8fe08f' : method === 'sedate' ? '#c8a8ff' : '#8fd0f0';
+if (method === 'bond') {
+const calm = U.clamp((e.ai.calm || 0) / (sd.tame.calm || 2.4), 0, 1);
+g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+g.fillStyle = calm >= 1 ? '#bfe4f5' : '#7a9ac0'; g.fillRect(bx, by, bw * calm, bh);
+} else if (prog > 0 || e.tg.sedated > 0) {
+g.fillStyle = 'rgba(0,0,0,0.55)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+g.fillStyle = '#ff8ab0'; g.fillRect(bx, by, bw * U.clamp(prog / need, 0, 1), bh);
+} else return;
+g.font = '700 ' + Math.max(8, 9 * z) + 'px system-ui, sans-serif';
+g.textAlign = 'center'; g.textBaseline = 'middle';
+g.fillStyle = mCol;
+g.fillText(mName + ' ' + prog + '/' + need, sx, by - 7 * z);
 }
-
-/** Botín en el suelo: icono procedural o bolsa si son varios tipos. */
+function drawCombatOverlay(g, e, sx, sy, s) {
+const z = R.zoom;
+const headY = sy - 34 * s;
+if (e.an.tele > 0 && e.ai && e.ai.mv) {
+const total = e.ai.mv.wind || 0.4;
+const k = U.clamp(1 - e.an.tele / total, 0, 1);
+const rr = 13 * s;
+g.strokeStyle = 'rgba(255,90,58,0.85)'; g.lineWidth = 3 * z;
+g.beginPath(); g.arc(sx, headY - 10 * z, rr, -PI / 2, -PI / 2 + k * U.TAU); g.stroke();
+g.strokeStyle = 'rgba(255,200,180,0.35)'; g.lineWidth = 1.4 * z;
+g.beginPath(); g.arc(sx, headY - 10 * z, rr, 0, U.TAU); g.stroke();
+}
+const st = [];
+if (e.cb.bleedT > 0) st.push('#e04b3a');
+if (e.cb.poisonT > 0) st.push('#7ac04a');
+if (e.cb.burnT > 0) st.push('#ff8a30');
+if (e.cb.slowT > 0) st.push('#8fd0f0');
+if (e.cb.stagger > 0) st.push('#f3cf7a');
+if (st.length) {
+const bx = sx - (st.length - 1) * 3.4 * z;
+for (let i = 0; i < st.length; i++) {
+ellipse(g, bx + i * 6.8 * z, headY - 22 * z, 2.4 * z, 2.4 * z, st[i]);
+g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 0.8;
+g.beginPath(); g.arc(bx + i * 6.8 * z, headY - 22 * z, 2.4 * z, 0, U.TAU); g.stroke();
+}
+}
+if (e.tg.sedated > 0) {
+g.strokeStyle = '#bfe4f5'; g.lineWidth = 1.8 * z; g.lineCap = 'round';
+for (let i = 0; i < 3; i++) {
+const zx = sx + 10 * z + i * 6 * z, zy = headY - 14 * z - i * 6 * z, ss = (3 + i) * z;
+g.beginPath();
+g.moveTo(zx, zy); g.lineTo(zx + ss, zy); g.lineTo(zx, zy + ss); g.lineTo(zx + ss, zy + ss);
+g.stroke();
+}
+}
+if (e.type !== 'player') return;
+if (e.blk && e.blk.on && e.shield) {
+const arc = e.shield.arc || 1.8;
+const a0 = e.t.ang - arc * 0.5, a1 = e.t.ang + arc * 0.5;
+const rr = 20 * s;
+const parrying = e.blk.t <= (e.parryWindow || 0.2);
+g.strokeStyle = parrying ? 'rgba(243,207,122,0.95)' : 'rgba(140,200,240,0.7)';
+g.lineWidth = (parrying ? 5 : 3.4) * z;
+g.beginPath(); g.ellipse(sx, sy - 8 * s, rr, rr * 0.55, 0, a0, a1); g.stroke();
+g.strokeStyle = parrying ? 'rgba(255,240,190,0.5)' : 'rgba(190,228,245,0.28)';
+g.lineWidth = 1.4 * z;
+g.beginPath(); g.ellipse(sx, sy - 8 * s, rr * 1.14, rr * 0.62, 0, a0, a1); g.stroke();
+}
+if (e.parryFlash > 0) {
+const k = U.clamp(e.parryFlash / 0.35, 0, 1);
+g.strokeStyle = 'rgba(255,240,190,' + (0.9 * k) + ')'; g.lineWidth = 4 * z * k;
+g.beginPath(); g.ellipse(sx, sy - 8 * s, (24 + (1 - k) * 20) * s, (12 + (1 - k) * 10) * s, 0, 0, U.TAU); g.stroke();
+}
+if (e.counterWindow > 0) {
+g.strokeStyle = 'rgba(143,224,143,' + (0.5 * U.clamp(e.counterWindow / 0.5, 0, 1)) + ')';
+g.lineWidth = 2 * z;
+g.beginPath(); g.ellipse(sx, sy, 16 * s, 8 * s, 0, 0, U.TAU); g.stroke();
+}
+let meter = 0, mcol = null, label = null;
+if (e.act && e.act.kind === 'draw') {
+meter = U.clamp(e.an.draw, 0, 1);
+mcol = meter > 0.96 ? '#f3cf7a' : '#8fd0f0';
+label = meter > 0.96 ? 'PLENO' : null;
+} else if (e.act && e.act.kind === 'charge') {
+meter = U.clamp(e.an.draw, 0, 1);
+mcol = meter >= 1 ? '#ffd76a' : '#e0a040';
+label = meter >= 1 ? 'PESADO' : null;
+}
+if (meter > 0) {
+const bw = 40 * z, bh = 5 * z, bx = sx - bw / 2, by = headY - 30 * z;
+g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+g.fillStyle = mcol; g.fillRect(bx, by, bw * meter, bh);
+g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 1;
+g.beginPath(); g.moveTo(bx + bw * 0.96, by - 2); g.lineTo(bx + bw * 0.96, by + bh + 2); g.stroke();
+if (label) {
+g.font = '800 ' + Math.max(8, 9 * z) + 'px system-ui, sans-serif';
+g.textAlign = 'center'; g.textBaseline = 'middle';
+g.fillStyle = mcol; g.fillText(label, sx, by - 8 * z);
+}
+}
+if (e.cast) {
+const k = U.clamp(e.cast.t / Math.max(0.1, e.cast.dur), 0, 1);
+const bw = 40 * z, bh = 5 * z, bx = sx - bw / 2, by = headY - 30 * z;
+g.fillStyle = 'rgba(0,0,0,0.6)'; g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+g.fillStyle = '#8fe08f'; g.fillRect(bx, by, bw * k, bh);
+const def = D.ITEMS[e.cast.id];
+g.font = '700 ' + Math.max(8, 9 * z) + 'px system-ui, sans-serif';
+g.textAlign = 'center'; g.textBaseline = 'middle';
+g.fillStyle = '#bfe9cd';
+g.fillText(def ? def.name : 'Aplicando…', sx, by - 8 * z);
+}
+}
+/* v5 · Botín con icono procedural, sin toasts al recoger */
 function drawLoot(g, l) {
-  const z = R.zoom;
-  const sx = w2sx(l.x, l.y), sy = w2sy(l.x, l.y);
-  if (sx < -60 || sy < -80 || sx > R.vw + 60 || sy > R.vh + 80) return;
-  if (!l.items || !l.items.length || l.life <= 0) return;
-  if (l.life < 10 && sin(R.time * 14) < 0) return;
-  const k = U.clamp(l.age / 0.45, 0, 1);
-  const pop = k < 1 ? sin(k * PI) * 18 * z : 0;
-  const bob = k >= 1 ? sin(R.time * 3 + l.uid) * 2 * z : 0;
-  const gl = 0.5 + 0.5 * sin(R.time * 3 + l.uid);
-  ellipseShadow(g, sx, sy, 9 * z, 0.3);
-  g.globalAlpha = 0.22 + gl * 0.16;
-  ellipse(g, sx, sy, 13 * z, 6.5 * z, l.bag ? '#f3cf7a' : '#cfe8ff');
-  g.globalAlpha = 1;
-  const cy = sy - 9 * z - pop - bob;
-  let total = 0;
-  for (let i = 0; i < l.items.length; i++) total += l.items[i].n;
-  if (l.bag) {
-    ellipse(g, sx, cy + 1 * z, 9.5 * z, 8 * z, '#8a6a44');
-    ellipse(g, sx - 2.5 * z, cy - 1 * z, 4.5 * z, 4 * z, '#a8855a');
-    poly(g, [[sx - 3.5 * z, cy - 6 * z], [sx + 3.5 * z, cy - 6 * z], [sx + 5 * z, cy - 10 * z], [sx - 5 * z, cy - 10 * z]], '#7a5a38', '#4a3620', 1);
-    ellipse(g, sx - 4 * z, cy - 10.5 * z, 3 * z, 2.2 * z, '#8a6a44');
-    ellipse(g, sx + 4 * z, cy - 10.5 * z, 3 * z, 2.2 * z, '#8a6a44');
-    g.fillStyle = '#d9a441'; g.fillRect(sx - 4 * z, cy - 6.6 * z, 8 * z, 1.8 * z);
-    ellipse(g, sx, cy - 3 * z, 1.6 * z, 1.6 * z, '#f3cf7a');
-  } else if (Art && Art.icon) {
-    const ic = Art.icon(l.items[0].id, 48), d = 26 * z;
-    g.drawImage(ic, sx - d / 2, cy - d / 2, d, d);
-  } else {
-    ellipse(g, sx, cy, 7 * z, 7 * z, '#c8b898');
-  }
-  if (total > 1) {
-    g.font = '700 ' + Math.max(9, 10 * z) + 'px system-ui, sans-serif';
-    g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.8)';
-    g.strokeText('×' + total, sx + 10 * z, cy + 8 * z);
-    g.fillStyle = '#f3cf7a'; g.fillText('×' + total, sx + 10 * z, cy + 8 * z);
-  }
+const z = R.zoom;
+const sx = w2sx(l.x, l.y), sy = w2sy(l.x, l.y);
+if (sx < -60 || sy < -80 || sx > R.vw + 60 || sy > R.vh + 80) return;
+if (!l.items || !l.items.length || l.life <= 0) return;
+if (l.life < 10 && sin(R.time * 14) < 0) return;
+const k = U.clamp(l.age / 0.45, 0, 1);
+const pop = k < 1 ? sin(k * PI) * 18 * z : 0;
+const bob = k >= 1 ? sin(R.time * 3 + l.uid) * 2 * z : 0;
+const gl = 0.5 + 0.5 * sin(R.time * 3 + l.uid);
+ellipseShadow(g, sx, sy, 9 * z, 0.3);
+g.globalAlpha = 0.22 + gl * 0.16;
+ellipse(g, sx, sy, 13 * z, 6.5 * z, l.bag ? '#f3cf7a' : '#cfe8ff');
+g.globalAlpha = 1;
+const cy = sy - 9 * z - pop - bob;
+let total = 0;
+for (let i = 0; i < l.items.length; i++) total += l.items[i].n;
+if (l.bag) {
+ellipse(g, sx, cy + 1 * z, 9.5 * z, 8 * z, '#8a6a44');
+ellipse(g, sx - 2.5 * z, cy - 1 * z, 4.5 * z, 4 * z, '#a8855a');
+poly(g, [[sx - 3.5 * z, cy - 6 * z], [sx + 3.5 * z, cy - 6 * z], [sx + 5 * z, cy - 10 * z], [sx - 5 * z, cy - 10 * z]], '#7a5a38', '#4a3620', 1);
+ellipse(g, sx - 4 * z, cy - 10.5 * z, 3 * z, 2.2 * z, '#8a6a44');
+ellipse(g, sx + 4 * z, cy - 10.5 * z, 3 * z, 2.2 * z, '#8a6a44');
+g.fillStyle = '#d9a441'; g.fillRect(sx - 4 * z, cy - 6.6 * z, 8 * z, 1.8 * z);
+ellipse(g, sx, cy - 3 * z, 1.6 * z, 1.6 * z, '#f3cf7a');
+} else if (Art && Art.icon) {
+const ic = Art.icon(l.items[0].id, 48), d = 26 * z;
+g.drawImage(ic, sx - d / 2, cy - d / 2, d, d);
+} else {
+ellipse(g, sx, cy, 7 * z, 7 * z, '#c8b898');
 }
-
+if (total > 1) {
+g.font = '700 ' + Math.max(9, 10 * z) + 'px system-ui, sans-serif';
+g.textAlign = 'center'; g.textBaseline = 'middle';
+g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,0.8)';
+g.strokeText('×' + total, sx + 10 * z, cy + 8 * z);
+g.fillStyle = '#f3cf7a'; g.fillText('×' + total, sx + 10 * z, cy + 8 * z);
+}
+}
 function isFocus(e) {
-  const a = E.aim, hm = E.hitMark;
-  return (a.kind === 'entity' && a.ref === e) || a.lock === e ||
-         (hm.ref === e && hm.id === e.id && hm.focusT > 0);
+const a = E.aim, hm = E.hitMark;
+return (a.kind === 'entity' && a.ref === e) || a.lock === e ||
+(hm.ref === e && hm.id === e.id && hm.focusT > 0);
 }
 const _twCache = new Map();
 function textW(g, font, text) {
-  const k = font + '|' + text;
-  let w = _twCache.get(k);
-  if (w === undefined) {
-    if (_twCache.size > 600) _twCache.clear();
-    w = g.measureText(text).width;
-    _twCache.set(k, w);
-  }
-  return w;
+const k = font + '|' + text;
+let w = _twCache.get(k);
+if (w === undefined) {
+if (_twCache.size > 600) _twCache.clear();
+w = g.measureText(text).width;
+_twCache.set(k, w);
 }
-
+return w;
+}
 function drawEntity(g, e, alpha) {
-  const ix = U.lerp(e.t.px, e.t.x, alpha), iy = U.lerp(e.t.py, e.t.y, alpha);
-  const sx = w2sx(ix, iy), sy = w2sy(ix, iy);
-  if (sx < -170 || sy < -210 || sx > R.vw + 170 || sy > R.vh + 190) return;
-  const s = (e.tg.scale || 1) * R.zoom * (e.an.spawn > 0 ? U.easeOutCubic(1 - e.an.spawn / 0.35) : 1);
-  if (s <= 0.02) return;
-  const walk = e.an.walk, tint = e.tg.tint;
-  const isPerson = e.type === 'player' || e.type === 'npc' || e.type === 'guard' || e.type === 'worker' ||
-                   e.species === 'bandit' || e.species === 'skeleton';
-  g.save();
-  if (e.an.hurt > 0) g.globalAlpha = 0.55 + 0.45 * Math.abs(sin(e.an.hurt * 40));
-  if (e.cb.iframe > 0 && e.type === 'player' && e.rollT <= 0) g.globalAlpha *= 0.65;
-  if (e.type === 'player' && e.rollT > 0) {
-    const rt = B_ROLLTIME();
-    g.translate(sx, sy - 10 * s);
-    g.rotate((1 - e.rollT / rt) * U.TAU * (cos(e.rollAng) >= 0 ? 1 : -1));
-    g.translate(-sx, -(sy - 10 * s));
-  }
-  if (e.tg.boss) {
-    const pulse = 0.5 + 0.5 * sin(R.time * 2.2);
-    ellipse(g, sx, sy, 26 * s * (1 + pulse * 0.06), 13 * s, 'rgba(200,50,30,' + (0.12 + pulse * 0.08) + ')');
-  }
-  if (e.tg.elite && !e.tg.boss) {
-    g.save(); g.globalAlpha = 0.16 + 0.06 * sin(R.time * 3 + e.id);
-    ellipse(g, sx, sy, 17 * s, 8 * s, '#f3cf7a'); g.restore();
-  }
-  let done = false;
-  if (Art) {
-    done = isPerson ? Art.drawPerson(g, e, sx, sy, s, walk, R.time)
-                    : Art.drawBody(g, e, sx, sy, s, walk, tint, R.time);
-  }
-  if (!done) {
-    if (isPerson) fallbackPerson(g, e, sx, sy, s, walk, tint);
-    else fallbackBeast(g, e, sx, sy, s, walk, tint);
-  }
-  if (e.type !== 'player' && e.an.hurt > 0.08) {
-    ellipse(g, sx, sy - 15 * s, 11 * s, 17 * s, 'rgba(255,255,255,' + (0.5 * U.clamp(e.an.hurt / 0.28, 0, 1)) + ')');
-  }
-  g.restore();
-
-  /* Jinete: se dibuja encima de su montura, alineado con la silla y el vuelo */
-  const pl = E.player;
-  if (pl && pl.mount === e && !pl.ko) {
-    const flyLift = e.tg.flying ? (18 + sin(R.time * 3 + (e.id || 0)) * 3) * s : 0;
-    const ry = sy - flyLift - 10 * s, rs = s * 0.92;
-    g.save();
-    if (pl.an.hurt > 0) g.globalAlpha = 0.6 + 0.4 * Math.abs(sin(pl.an.hurt * 40));
-    let ok = false;
-    if (Art) ok = Art.drawPerson(g, pl, sx, ry, rs, e.an.walk, R.time);
-    if (!ok) fallbackPerson(g, pl, sx, ry, rs, e.an.walk, pl.tg.tint);
-    g.restore();
-    drawCombatOverlay(g, pl, sx, ry, rs);
-  }
-
-  drawCombatOverlay(g, e, sx, sy, s);
-  drawTameBar(g, e, sx, sy, s);
-
-  /* Etiquetas y barras */
-  const p = E.player;
-  const near = p ? U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) < 110 : false;
-  const foc = e.type !== 'player' && isFocus(e);
-  if (e.type !== 'player' && (e.tg.boss || foc || (near && (e.type === 'npc' || e.tg.tamed || e.tg.guardian || e.st.hp < e.st.maxHp)))) {
-    const label = clean(e.name);
-    const by = sy - (e.tg.boss ? 54 : 36) * s;
-    const lf = '600 ' + Math.max(9, 11 * R.zoom) + 'px system-ui, sans-serif';
-    g.font = lf; g.textAlign = 'center'; g.textBaseline = 'middle';
-    const tw = textW(g, lf, label);
-    g.fillStyle = 'rgba(0,0,0,0.55)';
-    g.fillRect(sx - tw / 2 - 4, by - 8, tw + 8, 14);
-    g.fillStyle = e.tg.boss ? '#f2b6a8' : e.tg.guardian ? '#bfe4f5' : e.tg.tamed ? '#bfe9cd' : '#efe3c8';
-    g.fillText(label, sx, by - 1);
-    if (e.st.hp < e.st.maxHp || e.tg.boss || foc) {
-      const bw = Math.max(foc ? 46 : 26, tw), bh = foc ? 6 : 4, pad = foc ? 1 : 0;
-      const fr = U.clamp(e.st.hp / e.st.maxHp, 0, 1);
-      g.fillStyle = 'rgba(0,0,0,0.65)';
-      g.fillRect(sx - bw / 2 - pad, by + 7 - pad, bw + pad * 2, bh + pad * 2);
-      if (foc && E.hitMark.ref === e && E.hitMark.lag > fr) {
-        g.fillStyle = 'rgba(255,255,255,0.85)';
-        g.fillRect(sx - bw / 2, by + 7, bw * U.clamp(E.hitMark.lag, 0, 1), bh);
-      }
-      g.fillStyle = e.tg.boss ? '#e04b3a' : (foc ? '#e8503c' : '#3fbf6f');
-      g.fillRect(sx - bw / 2, by + 7, bw * fr, bh);
-      /* Fases del jefe: un punto por fase, encendidas las ya alcanzadas */
-      if (e.tg.boss) {
-        const sd = D.SPECIES[e.species];
-        if (sd && sd.boss && sd.boss.phases && D.ECO && D.ECO.bossPhase) {
-          const ph = sd.boss.phases, n = ph.length;
-          const cur = ph.indexOf(D.ECO.bossPhase(sd, fr));
-          for (let i = 0; i < n; i++) {
-            const px = sx - (n - 1) * 3.4 + i * 6.8;
-            ellipse(g, px, by + 7 + bh + 5, 2.2, 2.2, i <= cur ? '#f3cf7a' : 'rgba(120,100,70,0.6)');
-          }
-        }
-      }
-      if (foc && !e.tg.boss) {
-        g.font = '700 ' + Math.max(8, 9 * R.zoom) + 'px system-ui, sans-serif';
-        g.fillStyle = '#efe3c8';
-        g.fillText(Math.max(0, Math.ceil(e.st.hp)) + '/' + e.st.maxHp, sx, by + 7 + bh + 7);
-      }
-    }
-    if (e.tg.ready) readyBadge(g, sx + tw / 2 + 11 * R.zoom, by - 1, R.zoom);
-  }
+const ix = U.lerp(e.t.px, e.t.x, alpha), iy = U.lerp(e.t.py, e.t.y, alpha);
+const sx = w2sx(ix, iy), sy = w2sy(ix, iy);
+if (sx < -170 || sy < -210 || sx > R.vw + 170 || sy > R.vh + 190) return;
+const s = (e.tg.scale || 1) * R.zoom * (e.an.spawn > 0 ? U.easeOutCubic(1 - e.an.spawn / 0.35) : 1);
+if (s <= 0.02) return;
+const walk = e.an.walk, tint = e.tg.tint;
+const isPerson = e.type === 'player' || e.type === 'npc' || e.type === 'guard' || e.type === 'worker' ||
+e.species === 'bandit' || e.species === 'skeleton';
+g.save();
+if (e.an.hurt > 0) g.globalAlpha = 0.55 + 0.45 * Math.abs(sin(e.an.hurt * 40));
+if (e.cb.iframe > 0 && e.type === 'player' && e.rollT <= 0) g.globalAlpha *= 0.65;
+if (e.type === 'player' && e.rollT > 0) {
+const rt = (D.BAL && D.BAL.ROLL_TIME) || 0.34;
+g.translate(sx, sy - 10 * s);
+g.rotate((1 - e.rollT / rt) * U.TAU * (cos(e.rollAng) >= 0 ? 1 : -1));
+g.translate(-sx, -(sy - 10 * s));
 }
-function B_ROLLTIME() { return (D.BAL && D.BAL.ROLL_TIME) || 0.34; }
+if (e.tg.boss) {
+const pulse = 0.5 + 0.5 * sin(R.time * 2.2);
+ellipse(g, sx, sy, 26 * s * (1 + pulse * 0.06), 13 * s, 'rgba(200,50,30,' + (0.12 + pulse * 0.08) + ')');
+}
+if (e.tg.elite && !e.tg.boss) {
+g.save(); g.globalAlpha = 0.16 + 0.06 * sin(R.time * 3 + e.id);
+ellipse(g, sx, sy, 17 * s, 8 * s, '#f3cf7a'); g.restore();
+}
+let done = false;
+if (Art) {
+done = isPerson ? Art.drawPerson(g, e, sx, sy, s, walk, R.time)
+: Art.drawBody(g, e, sx, sy, s, walk, tint, R.time);
+}
+if (!done) {
+if (isPerson) fallbackPerson(g, e, sx, sy, s, walk, tint);
+else fallbackBeast(g, e, sx, sy, s, walk, tint);
+}
+if (e.type !== 'player' && e.an.hurt > 0.08) {
+ellipse(g, sx, sy - 15 * s, 11 * s, 17 * s, 'rgba(255,255,255,' + (0.5 * U.clamp(e.an.hurt / 0.28, 0, 1)) + ')');
+}
+g.restore();
+const pl = E.player;
+if (pl && pl.mount === e && !pl.ko) {
+const flyLift = e.tg.flying ? (18 + sin(R.time * 3 + (e.id || 0)) * 3) * s : 0;
+const ry = sy - flyLift - 10 * s, rs = s * 0.92;
+g.save();
+if (pl.an.hurt > 0) g.globalAlpha = 0.6 + 0.4 * Math.abs(sin(pl.an.hurt * 40));
+let ok = false;
+if (Art) ok = Art.drawPerson(g, pl, sx, ry, rs, e.an.walk, R.time);
+if (!ok) fallbackPerson(g, pl, sx, ry, rs, e.an.walk, pl.tg.tint);
+g.restore();
+drawCombatOverlay(g, pl, sx, ry, rs);
+}
+drawCombatOverlay(g, e, sx, sy, s);
+drawTameBar(g, e, sx, sy, s);
+const p = E.player;
+const near = p ? U.dist2(p.t.x, p.t.y, e.t.x, e.t.y) < 110 : false;
+const foc = e.type !== 'player' && isFocus(e);
+if (e.type !== 'player' && (e.tg.boss || foc || (near && (e.type === 'npc' || e.tg.tamed || e.tg.guardian || e.st.hp < e.st.maxHp)))) {
+const label = clean(e.name);
+const by = sy - (e.tg.boss ? 54 : 36) * s;
+const lf = '600 ' + Math.max(9, 11 * R.zoom) + 'px system-ui, sans-serif';
+g.font = lf; g.textAlign = 'center'; g.textBaseline = 'middle';
+const tw = textW(g, lf, label);
+g.fillStyle = 'rgba(0,0,0,0.55)';
+g.fillRect(sx - tw / 2 - 4, by - 8, tw + 8, 14);
+g.fillStyle = e.tg.boss ? '#f2b6a8' : e.tg.guardian ? '#bfe4f5' : e.tg.tamed ? '#bfe9cd' : '#efe3c8';
+g.fillText(label, sx, by - 1);
+if (e.st.hp < e.st.maxHp || e.tg.boss || foc) {
+const bw = Math.max(foc ? 46 : 26, tw), bh = foc ? 6 : 4, pad = foc ? 1 : 0;
+const fr = U.clamp(e.st.hp / e.st.maxHp, 0, 1);
+g.fillStyle = 'rgba(0,0,0,0.65)';
+g.fillRect(sx - bw / 2 - pad, by + 7 - pad, bw + pad * 2, bh + pad * 2);
+if (foc && E.hitMark.ref === e && E.hitMark.lag > fr) {
+g.fillStyle = 'rgba(255,255,255,0.85)';
+g.fillRect(sx - bw / 2, by + 7, bw * U.clamp(E.hitMark.lag, 0, 1), bh);
+}
+g.fillStyle = e.tg.boss ? '#e04b3a' : (foc ? '#e8503c' : '#3fbf6f');
+g.fillRect(sx - bw / 2, by + 7, bw * fr, bh);
+if (e.tg.boss) {
+const sd = D.SPECIES[e.species];
+if (sd && sd.boss && sd.boss.phases && D.ECO && D.ECO.bossPhase) {
+const ph = sd.boss.phases, n = ph.length;
+const cur = ph.indexOf(D.ECO.bossPhase(sd, fr));
+for (let i = 0; i < n; i++) {
+const px = sx - (n - 1) * 3.4 + i * 6.8;
+ellipse(g, px, by + 7 + bh + 5, 2.2, 2.2, i <= cur ? '#f3cf7a' : 'rgba(120,100,70,0.6)');
+}
+}
+}
+if (foc && !e.tg.boss) {
+g.font = '700 ' + Math.max(8, 9 * R.zoom) + 'px system-ui, sans-serif';
+g.fillStyle = '#efe3c8';
+g.fillText(Math.max(0, Math.ceil(e.st.hp)) + '/' + e.st.maxHp, sx, by + 7 + bh + 7);
+}
+}
+if (e.tg.ready) readyBadge(g, sx + tw / 2 + 11 * R.zoom, by - 1, R.zoom);
+}
+}
 /* ==========================================================
-8 · APUNTADO · retículo pegajoso, candidatos y trayectoria
+8 · APUNTADO · retículo pegajoso + trayectoria de arco
 ========================================================== */
-function B_AIMRANGE() { return (D.BAL && D.BAL.AIM_MAX_RANGE) || 11; }
 function drawAim(g, alpha) {
-  const a = E.aim, hm = E.hitMark, nh = E.nodeHit, z = R.zoom, t = R.time;
-  const p = E.player;
-
-  /* Marca de impacto: onda en el suelo + aspa sobre el cuerpo */
-  if (hm.ref && hm.t > 0 && !hm.ref.tg.dead) {
-    const e = hm.ref, k = 1 - hm.t / 0.4;
-    const ix = U.lerp(e.t.px, e.t.x, alpha), iy = U.lerp(e.t.py, e.t.y, alpha);
-    const sx = w2sx(ix, iy), sy = w2sy(ix, iy), es = e.tg.scale || 1, s = es * z;
-    const col = hm.crit ? '255,215,106' : '255,255,255';
-    g.lineCap = 'round';
-    g.strokeStyle = 'rgba(' + col + ',' + (0.9 * (1 - k)) + ')';
-    g.lineWidth = (hm.crit ? 4 : 3) * z * (1 - k * 0.6);
-    const rr = (0.5 + k * 0.9) * HW * z * es;
-    g.beginPath(); g.ellipse(sx, sy, rr, rr * 0.5, 0, 0, U.TAU); g.stroke();
-    g.lineWidth = 2.8 * z;
-    const cy = sy - 16 * s, o1 = (5 + k * 6) * s, o2 = (11 + k * 8) * s;
-    for (let q = 0; q < 4; q++) {
-      const qx = (q & 1) ? -1 : 1, qy = (q & 2) ? -1 : 1;
-      g.beginPath(); g.moveTo(sx + qx * o1, cy + qy * o1); g.lineTo(sx + qx * o2, cy + qy * o2); g.stroke();
-    }
-  }
-
-  /* Onda dorada al golpear un nodo */
-  if (nh.node && nh.t > 0 && !nh.node.dead) {
-    const k = 1 - nh.t / 0.28;
-    const sx = w2sx(nh.node.x + 0.5, nh.node.y + 0.5), sy = w2sy(nh.node.x + 0.5, nh.node.y + 0.5);
-    g.strokeStyle = 'rgba(243,207,122,' + (0.85 * (1 - k)) + ')';
-    g.lineWidth = 3 * z * (1 - k * 0.5);
-    const rr = (0.5 + k * 0.7) * HW * z;
-    g.beginPath(); g.ellipse(sx, sy, rr, rr * 0.5, 0, 0, U.TAU); g.stroke();
-  }
-
-  /* Barra de golpes del nodo, con aviso de herramienta */
-  const node = a.kind === 'node' ? a.ref : (nh.node && nh.focusT > 0 ? nh.node : null);
-  if (node && !node.dead) {
-    const nd = D.NODES[node.key];
-    if (nd) {
-      const sx = w2sx(node.x + 0.5, node.y + 0.5), sy = w2sy(node.x + 0.5, node.y + 0.5) - 36 * z;
-      const bw = 46 * z, bh = 6 * z, hits = nd.hits;
-      const showBar = node.hp < hits || nh.node === node;
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      let msg = nd.name, bad = false;
-      if (a.kind === 'node' && a.ref === node && !a.valid) {
-        bad = true;
-        const ti = E.toolInfo(p);
-        msg = (ti && ti.kind === nd.tool) ? 'Herramienta débil'
-          : (nd.tool === 'axe' ? 'Requiere hacha' : nd.tool === 'pick' ? 'Requiere pico' : 'A mano');
-      }
-      const mf = '700 ' + Math.max(9, 11 * z) + 'px system-ui, sans-serif';
-      g.font = mf;
-      const tw = textW(g, mf, msg);
-      g.fillStyle = 'rgba(0,0,0,0.6)';
-      g.fillRect(sx - tw / 2 - 4, sy - bh - 15 * z, tw + 8, 13 * z);
-      g.fillStyle = bad ? '#ff8a7a' : '#efe3c8';
-      g.fillText(msg, sx, sy - bh - 8.5 * z);
-      if (showBar && !bad) {
-        g.fillStyle = 'rgba(0,0,0,0.7)'; g.fillRect(sx - bw / 2 - 1, sy - 1, bw + 2, bh + 2);
-        const fr = U.clamp(node.hp / hits, 0, 1);
-        g.fillStyle = nh.node === node && nh.t > 0 ? '#fff3c4' : '#d9a441';
-        g.fillRect(sx - bw / 2, sy, bw * fr, bh);
-        if (hits > 1 && hits <= 12) {
-          g.fillStyle = 'rgba(0,0,0,0.55)';
-          for (let i = 1; i < hits; i++) g.fillRect(sx - bw / 2 + bw * i / hits - 0.5, sy, 1, bh);
-        }
-      }
-    }
-  }
-
-  /* Candidatos alternativos: puntos tenues (Tab cicla entre ellos) */
-  if (a.cands && a.cands.length > 1 && p) {
-    for (let i = 0; i < a.cands.length; i++) {
-      const c = a.cands[i];
-      if (!c || c.tg.dead || c === a.lock) continue;
-      const cx2 = w2sx(c.t.x, c.t.y), cy2 = w2sy(c.t.x, c.t.y);
-      if (cx2 < -20 || cy2 < -20 || cx2 > R.vw + 20 || cy2 > R.vh + 20) continue;
-      g.fillStyle = 'rgba(243,207,122,0.32)';
-      g.beginPath(); g.arc(cx2, cy2 - 4 * z, 2.6 * z, 0, U.TAU); g.fill();
-    }
-  }
-
-  /* Trayectoria de tiro con arco o ballesta */
-  if (p && p.isBow && a.mode === 'bow' && !p.ko) {
-    const px = w2sx(p.t.x, p.t.y), py = w2sy(p.t.x, p.t.y) - 14 * z;
-    const reach = B_AIMRANGE();
-    const tx = p.t.x + cos(p.t.ang) * reach, ty = p.t.y + sin(p.t.ang) * reach;
-    const ex = w2sx(tx, ty), ey = w2sy(tx, ty) - 14 * z;
-    g.save();
-    const tensing = a.draw > 0 || (CR.Input.bowAim && CR.Input.bowAim.active);
-    if (tensing) {
-      /* Tensando: línea sólida con marcas de distancia para apuntar con precisión */
-      g.strokeStyle = a.draw > 0.96 ? 'rgba(243,207,122,0.95)' : 'rgba(190,228,245,0.8)';
-      g.lineWidth = 2.4 * z;
-      g.beginPath(); g.moveTo(px, py); g.lineTo(ex, ey); g.stroke();
-      for (let m = 4; m < reach; m += 4) {
-        const mx = w2sx(p.t.x + cos(p.t.ang) * m, p.t.y + sin(p.t.ang) * m), my = w2sy(p.t.x + cos(p.t.ang) * m, p.t.y + sin(p.t.ang) * m) - 14 * z;
-        g.beginPath(); g.arc(mx, my, 2.4 * z, 0, U.TAU); g.fillStyle = 'rgba(255,255,255,0.85)'; g.fill();
-      }
-    } else {
-      g.setLineDash([5 * z, 6 * z]); g.lineDashOffset = -t * 22;
-      g.strokeStyle = 'rgba(190,228,245,0.32)';
-      g.lineWidth = 1.6 * z;
-      g.beginPath(); g.moveTo(px, py); g.lineTo(ex, ey); g.stroke();
-    }
-    g.restore();
-    g.strokeStyle = 'rgba(243,207,122,0.4)'; g.lineWidth = 1.4 * z;
-    g.beginPath(); g.ellipse(ex, ey + 14 * z, 8 * z, 4 * z, 0, 0, U.TAU); g.stroke();
-  }
-
-  if (!a.kind) return;
-  let x = a.x, y = a.y;
-  if (a.kind === 'entity' && a.ref) {
-    x = U.lerp(a.ref.t.px, a.ref.t.x, alpha);
-    y = U.lerp(a.ref.t.py, a.ref.t.y, alpha);
-  }
-  const sx = w2sx(x, y), sy = w2sy(x, y);
-  const good = a.valid && a.inRange;
-  const col = !a.valid ? '255,90,58'
-    : (a.inRange ? (a.kind === 'node' ? '243,207,122' : '255,106,90') : '190,190,190');
-  const pulse = good ? 0.7 + 0.3 * sin(t * 9) : 0.45;
-  const rx = a.r * HW * z * 1.15, ry = rx * 0.5;
-  g.fillStyle = 'rgba(' + col + ',' + (0.11 * pulse) + ')';
-  g.beginPath(); g.ellipse(sx, sy, rx, ry, 0, 0, U.TAU); g.fill();
-  g.strokeStyle = 'rgba(' + col + ',' + pulse + ')';
-  g.lineWidth = 2.4 * z; g.lineCap = 'round';
-  for (let k = 0; k < 4; k++) {
-    const a0 = t * 1.8 + k * PI / 2;
-    g.beginPath(); g.ellipse(sx, sy, rx, ry, 0, a0, a0 + 0.9); g.stroke();
-  }
-  /* Objetivo fijado: anillo interior sólido, chevrón y aviso de ciclo */
-  if (a.kind === 'entity' && a.lock === a.ref) {
-    g.strokeStyle = 'rgba(' + col + ',0.85)'; g.lineWidth = 1.6 * z;
-    g.beginPath(); g.ellipse(sx, sy, rx * 0.62, ry * 0.62, 0, 0, U.TAU); g.stroke();
-    const s = (a.ref.tg.scale || 1) * z;
-    const by = sy - 34 * s - 14 * z - Math.abs(sin(t * 5)) * 4 * z;
-    g.fillStyle = 'rgba(' + col + ',0.95)';
-    g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 1.5;
-    g.beginPath(); g.moveTo(sx - 6 * z, by - 8 * z); g.lineTo(sx + 6 * z, by - 8 * z); g.lineTo(sx, by); g.closePath();
-    g.stroke(); g.fill();
-    if (a.cands && a.cands.length > 1) {
-      g.font = '700 ' + Math.max(7, 8 * z) + 'px system-ui, sans-serif';
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.fillStyle = 'rgba(243,207,122,0.75)';
-      g.fillText('TAB', sx, by - 14 * z);
-    }
-  }
+const a = E.aim, hm = E.hitMark, nh = E.nodeHit, z = R.zoom, t = R.time;
+const p = E.player;
+if (hm.ref && hm.t > 0 && !hm.ref.tg.dead) {
+const e = hm.ref, k = 1 - hm.t / 0.4;
+const ix = U.lerp(e.t.px, e.t.x, alpha), iy = U.lerp(e.t.py, e.t.y, alpha);
+const sx = w2sx(ix, iy), sy = w2sy(ix, iy), es = e.tg.scale || 1, s = es * z;
+const col = hm.crit ? '255,215,106' : '255,255,255';
+g.lineCap = 'round';
+g.strokeStyle = 'rgba(' + col + ',' + (0.9 * (1 - k)) + ')';
+g.lineWidth = (hm.crit ? 4 : 3) * z * (1 - k * 0.6);
+const rr = (0.5 + k * 0.9) * HW * z * es;
+g.beginPath(); g.ellipse(sx, sy, rr, rr * 0.5, 0, 0, U.TAU); g.stroke();
+g.lineWidth = 2.8 * z;
+const cy = sy - 16 * s, o1 = (5 + k * 6) * s, o2 = (11 + k * 8) * s;
+for (let q = 0; q < 4; q++) {
+const qx = (q & 1) ? -1 : 1, qy = (q & 2) ? -1 : 1;
+g.beginPath(); g.moveTo(sx + qx * o1, cy + qy * o1); g.lineTo(sx + qx * o2, cy + qy * o2); g.stroke();
 }
-
+}
+if (nh.node && nh.t > 0 && !nh.node.dead) {
+const k = 1 - nh.t / 0.28;
+const sx = w2sx(nh.node.x + 0.5, nh.node.y + 0.5), sy = w2sy(nh.node.x + 0.5, nh.node.y + 0.5);
+g.strokeStyle = 'rgba(243,207,122,' + (0.85 * (1 - k)) + ')';
+g.lineWidth = 3 * z * (1 - k * 0.5);
+const rr = (0.5 + k * 0.7) * HW * z;
+g.beginPath(); g.ellipse(sx, sy, rr, rr * 0.5, 0, 0, U.TAU); g.stroke();
+}
+const node = a.kind === 'node' ? a.ref : (nh.node && nh.focusT > 0 ? nh.node : null);
+if (node && !node.dead) {
+const nd = D.NODES[node.key];
+if (nd) {
+const sx = w2sx(node.x + 0.5, node.y + 0.5), sy = w2sy(node.x + 0.5, node.y + 0.5) - 36 * z;
+const bw = 46 * z, bh = 6 * z, hits = nd.hits;
+const showBar = node.hp < hits || nh.node === node;
+g.textAlign = 'center'; g.textBaseline = 'middle';
+let msg = nd.name, bad = false;
+if (a.kind === 'node' && a.ref === node && !a.valid) {
+bad = true;
+const ti = E.toolInfo(p);
+msg = (ti && ti.kind === nd.tool) ? 'Herramienta débil'
+: (nd.tool === 'axe' ? 'Requiere hacha' : nd.tool === 'pick' ? 'Requiere pico' : 'A mano');
+}
+const mf = '700 ' + Math.max(9, 11 * z) + 'px system-ui, sans-serif';
+g.font = mf;
+const tw = textW(g, mf, msg);
+g.fillStyle = 'rgba(0,0,0,0.6)';
+g.fillRect(sx - tw / 2 - 4, sy - bh - 15 * z, tw + 8, 13 * z);
+g.fillStyle = bad ? '#ff8a7a' : '#efe3c8';
+g.fillText(msg, sx, sy - bh - 8.5 * z);
+if (showBar && !bad) {
+g.fillStyle = 'rgba(0,0,0,0.7)'; g.fillRect(sx - bw / 2 - 1, sy - 1, bw + 2, bh + 2);
+const fr = U.clamp(node.hp / hits, 0, 1);
+g.fillStyle = nh.node === node && nh.t > 0 ? '#fff3c4' : '#d9a441';
+g.fillRect(sx - bw / 2, sy, bw * fr, bh);
+if (hits > 1 && hits <= 12) {
+g.fillStyle = 'rgba(0,0,0,0.55)';
+for (let i = 1; i < hits; i++) g.fillRect(sx - bw / 2 + bw * i / hits - 0.5, sy, 1, bh);
+}
+}
+}
+}
+if (a.cands && a.cands.length > 1 && p) {
+for (let i = 0; i < a.cands.length; i++) {
+const c = a.cands[i];
+if (!c || c.tg.dead || c === a.lock) continue;
+const cx2 = w2sx(c.t.x, c.t.y), cy2 = w2sy(c.t.x, c.t.y);
+if (cx2 < -20 || cy2 < -20 || cx2 > R.vw + 20 || cy2 > R.vh + 20) continue;
+g.fillStyle = 'rgba(243,207,122,0.32)';
+g.beginPath(); g.arc(cx2, cy2 - 4 * z, 2.6 * z, 0, U.TAU); g.fill();
+}
+}
+if (p && p.isBow && a.mode === 'bow' && !p.ko) {
+const px = w2sx(p.t.x, p.t.y), py = w2sy(p.t.x, p.t.y) - 14 * z;
+const reach = (D.BAL && D.BAL.AIM_MAX_RANGE) || 11;
+const tx = p.t.x + cos(p.t.ang) * reach, ty = p.t.y + sin(p.t.ang) * reach;
+const ex = w2sx(tx, ty), ey = w2sy(tx, ty) - 14 * z;
+g.save();
+const tensing = a.draw > 0 || (CR.Input.bowAim && CR.Input.bowAim.active);
+if (tensing) {
+g.strokeStyle = a.draw > 0.96 ? 'rgba(243,207,122,0.95)' : 'rgba(190,228,245,0.8)';
+g.lineWidth = 2.4 * z;
+g.beginPath(); g.moveTo(px, py); g.lineTo(ex, ey); g.stroke();
+for (let m = 4; m < reach; m += 4) {
+const mx = w2sx(p.t.x + cos(p.t.ang) * m, p.t.y + sin(p.t.ang) * m), my = w2sy(p.t.x + cos(p.t.ang) * m, p.t.y + sin(p.t.ang) * m) - 14 * z;
+g.beginPath(); g.arc(mx, my, 2.4 * z, 0, U.TAU); g.fillStyle = 'rgba(255,255,255,0.85)'; g.fill();
+}
+} else {
+g.setLineDash([5 * z, 6 * z]); g.lineDashOffset = -t * 22;
+g.strokeStyle = 'rgba(190,228,245,0.32)';
+g.lineWidth = 1.6 * z;
+g.beginPath(); g.moveTo(px, py); g.lineTo(ex, ey); g.stroke();
+}
+g.restore();
+g.strokeStyle = 'rgba(243,207,122,0.4)'; g.lineWidth = 1.4 * z;
+g.beginPath(); g.ellipse(ex, ey + 14 * z, 8 * z, 4 * z, 0, 0, U.TAU); g.stroke();
+}
+if (!a.kind) return;
+let x = a.x, y = a.y;
+if (a.kind === 'entity' && a.ref) {
+x = U.lerp(a.ref.t.px, a.ref.t.x, alpha);
+y = U.lerp(a.ref.t.py, a.ref.t.y, alpha);
+}
+const sx = w2sx(x, y), sy = w2sy(x, y);
+const good = a.valid && a.inRange;
+const col = !a.valid ? '255,90,58'
+: (a.inRange ? (a.kind === 'node' ? '243,207,122' : '255,106,90') : '190,190,190');
+const pulse = good ? 0.7 + 0.3 * sin(t * 9) : 0.45;
+const rx = a.r * HW * z * 1.15, ry = rx * 0.5;
+g.fillStyle = 'rgba(' + col + ',' + (0.11 * pulse) + ')';
+g.beginPath(); g.ellipse(sx, sy, rx, ry, 0, 0, U.TAU); g.fill();
+g.strokeStyle = 'rgba(' + col + ',' + pulse + ')';
+g.lineWidth = 2.4 * z; g.lineCap = 'round';
+for (let k = 0; k < 4; k++) {
+const a0 = t * 1.8 + k * PI / 2;
+g.beginPath(); g.ellipse(sx, sy, rx, ry, 0, a0, a0 + 0.9); g.stroke();
+}
+if (a.kind === 'entity' && a.lock === a.ref) {
+g.strokeStyle = 'rgba(' + col + ',0.85)'; g.lineWidth = 1.6 * z;
+g.beginPath(); g.ellipse(sx, sy, rx * 0.62, ry * 0.62, 0, 0, U.TAU); g.stroke();
+const s = (a.ref.tg.scale || 1) * z;
+const by = sy - 34 * s - 14 * z - Math.abs(sin(t * 5)) * 4 * z;
+g.fillStyle = 'rgba(' + col + ',0.95)';
+g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 1.5;
+g.beginPath(); g.moveTo(sx - 6 * z, by - 8 * z); g.lineTo(sx + 6 * z, by - 8 * z); g.lineTo(sx, by); g.closePath();
+g.stroke(); g.fill();
+if (a.cands && a.cands.length > 1) {
+g.font = '700 ' + Math.max(7, 8 * z) + 'px system-ui, sans-serif';
+g.textAlign = 'center'; g.textBaseline = 'middle';
+g.fillStyle = 'rgba(243,207,122,0.75)';
+g.fillText('TAB', sx, by - 14 * z);
+}
+}
+}
 /* ==========================================================
 9 · LISTA DE DIBUJO ORDENADA POR PROFUNDIDAD
 ========================================================== */
@@ -1516,116 +1551,108 @@ const drawList = [];
 const sortBuf = [];
 let drawN = 0;
 function push(depth, kind, a, b, c, d) {
-  let o = drawList[drawN];
-  if (!o) { o = { depth: 0, kind: '', a: null, b: 0, c: 0, d: null }; drawList[drawN] = o; }
-  o.depth = depth; o.kind = kind; o.a = a; o.b = b; o.c = c; o.d = d;
-  drawN++;
+let o = drawList[drawN];
+if (!o) { o = { depth: 0, kind: '', a: null, b: 0, c: 0, d: null }; drawList[drawN] = o; }
+o.depth = depth; o.kind = kind; o.a = a; o.b = b; o.c = c; o.d = d;
+drawN++;
 }
 function cmpDepth(a, b) { return a.depth - b.depth; }
 function collect(x0, y0, x1, y1) {
-  drawN = 0;
-  /* Muralla y puertas de Vhalor */
-  const c = W.city;
-  if (c) {
-    for (let x = c.x; x < c.x + c.w; x++) {
-      for (let k = 0; k < 2; k++) {
-        const y = k === 0 ? c.y : c.y + c.h - 1;
-        if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-        if (W.flags[y * C.WORLD + x] & W.F.DOOR) continue;
-        push(x + y, 'wall', atlas.wall, x, y, null);
-      }
-    }
-    for (let y = c.y; y < c.y + c.h; y++) {
-      for (let k = 0; k < 2; k++) {
-        const x = k === 0 ? c.x : c.x + c.w - 1;
-        if (x < x0 || x > x1 || y < y0 || y > y1) continue;
-        if (W.flags[y * C.WORLD + x] & W.F.DOOR) continue;
-        push(x + y, 'wall', atlas.wall, x, y, null);
-      }
-    }
-    for (let i = 0; i < W.gates.length; i++) {
-      const gt = W.gates[i];
-      if (gt.x < x0 - 3 || gt.x > x1 + 3 || gt.y < y0 - 3 || gt.y > y1 + 3) continue;
-      push(gt.x + gt.y + 0.4, 'gate', gt.dir === 's' ? atlas.gate.s : atlas.gate.e, gt.x, gt.y, gt);
-    }
-  }
-  /* Nodos: se recorre lo barato (área visible o mapa de nodos) */
-  const area = (x1 - x0 + 1) * (y1 - y0 + 1);
-  if (W.nodes.size > area) {
-    for (let y = y0; y <= y1; y++) {
-      const row = y * C.WORLD;
-      for (let x = x0; x <= x1; x++) {
-        const n = W.nodes.get(row + x);
-        if (!n || n.dead) continue;
-        const arr = atlas.nodes[n.key];
-        if (!arr) continue;
-        push(x + y, 'node', arr[(hash2(x, y) * 3) | 0], x, y, n);
-      }
-    }
-  } else {
-    W.nodes.forEach(function (n) {
-      if (n.dead || n.x < x0 || n.x > x1 || n.y < y0 || n.y > y1) return;
-      const arr = atlas.nodes[n.key];
-      if (!arr) return;
-      push(n.x + n.y, 'node', arr[(hash2(n.x, n.y) * 3) | 0], n.x, n.y, n);
-    });
-  }
-  /* Suelo arado y cultivos */
-  if (W.soil.size > 0) {
-    if (W.soil.size * 2 > area) {
-      for (let y = y0; y <= y1; y++) {
-        const row = y * C.WORLD;
-        for (let x = x0; x <= x1; x++) {
-          const s = W.soil.get(row + x);
-          if (s) push(x + y - 0.01, 'soil', s, x, y, row + x);
-        }
-      }
-    } else {
-      W.soil.forEach(function (s, idx) {
-        const x = idx % C.WORLD, y = (idx / C.WORLD) | 0;
-        if (x < x0 || x > x1 || y < y0 || y > y1) return;
-        push(x + y - 0.01, 'soil', s, x, y, idx);
-      });
-    }
-  }
-  /* Edificios (sprite cacheado por clave y tamaño) */
-  for (let i = 0; i < W.buildings.length; i++) {
-    const b = W.buildings[i];
-    if (b.x + b.w < x0 || b.x > x1 || b.y + b.h < y0 || b.y > y1) continue;
-    let spr = b._spr;
-    if (!spr || b._sprK !== b.key || b._sprW !== b.w || b._sprH !== b.h) {
-      const info = b.info || W.structInfo(b.key) || { kind: 'house' };
-      spr = b._spr = buildingSprite(b.key, b.w, b.h, info);
-      b._sprK = b.key; b._sprW = b.w; b._sprH = b.h;
-    }
-    push(b.x + b.y + (b.w + b.h) * 0.5 - 0.5, 'building', spr, b.x, b.y, b);
-  }
-  /* Entidades: el jinete se pinta dentro de su montura */
-  const pl = E.player;
-  for (let i = 0; i < E.list.length; i++) {
-    const e = E.list[i];
-    if (e.tg.dead) continue;
-    if (e === pl && pl.mount) continue;
-    if (e.t.x < x0 - 2 || e.t.x > x1 + 2 || e.t.y < y0 - 2 || e.t.y > y1 + 2) continue;
-    push(e.t.x + e.t.y + 0.02, 'entity', e, 0, 0, null);
-  }
-  /* Botín */
-  for (let i = 0; i < E.loot.length; i++) {
-    const l = E.loot[i];
-    if (l.x < x0 - 1 || l.x > x1 + 1 || l.y < y0 - 1 || l.y > y1 + 1) continue;
-    push(l.x + l.y + 0.01, 'loot', l, 0, 0, null);
-  }
-  /* Proyectiles */
-  for (let i = 0; i < E.projectiles.length; i++) {
-    const pr = E.projectiles[i];
-    push(pr.x + pr.y + 0.05, 'proj', pr, 0, 0, null);
-  }
-  sortBuf.length = drawN;
-  for (let i = 0; i < drawN; i++) sortBuf[i] = drawList[i];
-  sortBuf.sort(cmpDepth);
-  return sortBuf;
+drawN = 0;
+const c = W.city;
+if (c) {
+for (let x = c.x; x < c.x + c.w; x++) {
+for (let k = 0; k < 2; k++) {
+const y = k === 0 ? c.y : c.y + c.h - 1;
+if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+if (W.flags[y * C.WORLD + x] & W.F.DOOR) continue;
+push(x + y, 'wall', atlas.wall, x, y, null);
 }
-
+}
+for (let y = c.y; y < c.y + c.h; y++) {
+for (let k = 0; k < 2; k++) {
+const x = k === 0 ? c.x : c.x + c.w - 1;
+if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+if (W.flags[y * C.WORLD + x] & W.F.DOOR) continue;
+push(x + y, 'wall', atlas.wall, x, y, null);
+}
+}
+for (let i = 0; i < W.gates.length; i++) {
+const gt = W.gates[i];
+if (gt.x < x0 - 3 || gt.x > x1 + 3 || gt.y < y0 - 3 || gt.y > y1 + 3) continue;
+push(gt.x + gt.y + 0.4, 'gate', gt.dir === 's' ? atlas.gate.s : atlas.gate.e, gt.x, gt.y, gt);
+}
+}
+const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+if (W.nodes.size > area) {
+for (let y = y0; y <= y1; y++) {
+const row = y * C.WORLD;
+for (let x = x0; x <= x1; x++) {
+const n = W.nodes.get(row + x);
+if (!n || n.dead) continue;
+const arr = atlas.nodes[n.key];
+if (!arr) continue;
+push(x + y, 'node', arr[(hash2(x, y) * 3) | 0], x, y, n);
+}
+}
+} else {
+W.nodes.forEach(function (n) {
+if (n.dead || n.x < x0 || n.x > x1 || n.y < y0 || n.y > y1) return;
+const arr = atlas.nodes[n.key];
+if (!arr) return;
+push(n.x + n.y, 'node', arr[(hash2(n.x, n.y) * 3) | 0], n.x, n.y, n);
+});
+}
+if (W.soil.size > 0) {
+if (W.soil.size * 2 > area) {
+for (let y = y0; y <= y1; y++) {
+const row = y * C.WORLD;
+for (let x = x0; x <= x1; x++) {
+const s = W.soil.get(row + x);
+if (s) push(x + y - 0.01, 'soil', s, x, y, row + x);
+}
+}
+} else {
+W.soil.forEach(function (s, idx) {
+const x = idx % C.WORLD, y = (idx / C.WORLD) | 0;
+if (x < x0 || x > x1 || y < y0 || y > y1) return;
+push(x + y - 0.01, 'soil', s, x, y, idx);
+});
+}
+}
+for (let i = 0; i < W.buildings.length; i++) {
+const b = W.buildings[i];
+if (b.x + b.w < x0 || b.x > x1 || b.y + b.h < y0 || b.y > y1) continue;
+let spr = b._spr;
+if (!spr || b._sprK !== b.key || b._sprW !== b.w || b._sprH !== b.h) {
+const info = b.info || W.structInfo(b.key) || { kind: 'house' };
+spr = b._spr = buildingSprite(b.key, b.w, b.h, info);
+b._sprK = b.key; b._sprW = b.w; b._sprH = b.h;
+}
+push(b.x + b.y + (b.w + b.h) * 0.5 - 0.5, 'building', spr, b.x, b.y, b);
+}
+const pl = E.player;
+for (let i = 0; i < E.list.length; i++) {
+const e = E.list[i];
+if (e.tg.dead) continue;
+if (e === pl && pl.mount) continue;
+if (e.t.x < x0 - 2 || e.t.x > x1 + 2 || e.t.y < y0 - 2 || e.t.y > y1 + 2) continue;
+push(e.t.x + e.t.y + 0.02, 'entity', e, 0, 0, null);
+}
+for (let i = 0; i < E.loot.length; i++) {
+const l = E.loot[i];
+if (l.x < x0 - 1 || l.x > x1 + 1 || l.y < y0 - 1 || l.y > y1 + 1) continue;
+push(l.x + l.y + 0.01, 'loot', l, 0, 0, null);
+}
+for (let i = 0; i < E.projectiles.length; i++) {
+const pr = E.projectiles[i];
+push(pr.x + pr.y + 0.05, 'proj', pr, 0, 0, null);
+}
+sortBuf.length = drawN;
+for (let i = 0; i < drawN; i++) sortBuf[i] = drawList[i];
+sortBuf.sort(cmpDepth);
+return sortBuf;
+}
 function drawSoilTile(g, s, x, y) {
   const sx = w2sx(x + 0.5, y + 0.5), sy = w2sy(x + 0.5, y + 0.5);
   const z = R.zoom;
@@ -1797,7 +1824,7 @@ function drawDrawables(g, list, alpha) {
           spawnPart(b.x + b.w / 2, b.y + b.h / 2, 'drop', '#bfe4f5', { z: 1.2, vz: 1.2, grav: 5, life: 0.6, size: 1.8 });
         }
       }
-      if (b.key === 'smelter' || b.key === 'forge' || bk === 'forge' || bk === 'smithy') {
+      if (b.key === 'smelter' || b.key === 'forge' || b.key === 'public_forge' || bk === 'forge' || bk === 'smithy') {
         const fl = 0.75 + 0.25 * sin(R.time * 11 + b.uid);
         g.globalAlpha = 0.85;
         ellipse(g, cx - 10 * z, cy - 12 * z, 5 * z * fl, 4 * z * fl, '#ff7a30');
@@ -1819,769 +1846,730 @@ function drawDrawables(g, list, alpha) {
     }
   }
 }
-
 /* ==========================================================
-10 · AGUA, HAZARDS, SANTUARIOS, CAMPAMENTOS Y CLIMA
+10 · AGUA, HAZARDS, SANTUARIOS, CLIMA
 ========================================================== */
 const _wb = [[], [], [], []];
 function drawWater(g, x0, y0, x1, y1) {
-  let n = 0;
-  const cap = Math.round(340 * R.quality), z = R.zoom;
-  for (let b = 0; b < 4; b++) _wb[b].length = 0;
-  outer:
-  for (let y = y0; y <= y1; y++) {
-    for (let x = x0; x <= x1; x++) {
-      if (!(W.flags[y * C.WORLD + x] & W.F.WATER)) continue;
-      if (++n > cap) break outer;
-      const sx = w2sx(x + 0.5, y + 0.5), sy = w2sy(x + 0.5, y + 0.5);
-      if (sx < -40 || sx > R.vw + 40 || sy < -30 || sy > R.vh + 30) continue;
-      const sn = sin(R.time * 1.4 + (x + y) * 0.55);
-      const bi = Math.min(3, Math.floor((sn + 1) * 2));
-      const off = sn * 5 * z;
-      _wb[bi].push(sx - 14 * z + off, sy - 2 * z, sx + 6 * z + off, sy + 3 * z);
-    }
-  }
-  g.lineWidth = 1.6 * z;
-  for (let b = 0; b < 4; b++) {
-    const a = _wb[b];
-    if (!a.length) continue;
-    g.strokeStyle = 'rgba(200,235,255,' + (0.10 + 0.10 * ((b + 0.5) / 2 - 1)).toFixed(3) + ')';
-    g.beginPath();
-    for (let i = 0; i < a.length; i += 4) { g.moveTo(a[i], a[i + 1]); g.lineTo(a[i + 2], a[i + 3]); }
-    g.stroke();
-  }
+let n = 0;
+const cap = Math.round(340 * R.quality), z = R.zoom;
+for (let b = 0; b < 4; b++) _wb[b].length = 0;
+outer:
+for (let y = y0; y <= y1; y++) {
+for (let x = x0; x <= x1; x++) {
+if (!(W.flags[y * C.WORLD + x] & W.F.WATER)) continue;
+if (++n > cap) break outer;
+const sx = w2sx(x + 0.5, y + 0.5), sy = w2sy(x + 0.5, y + 0.5);
+if (sx < -40 || sx > R.vw + 40 || sy < -30 || sy > R.vh + 30) continue;
+const sn = sin(R.time * 1.4 + (x + y) * 0.55);
+const bi = Math.min(3, Math.floor((sn + 1) * 2));
+const off = sn * 5 * z;
+_wb[bi].push(sx - 14 * z + off, sy - 2 * z, sx + 6 * z + off, sy + 3 * z);
+}
+}
+g.lineWidth = 1.6 * z;
+for (let b = 0; b < 4; b++) {
+const a = _wb[b];
+if (!a.length) continue;
+g.strokeStyle = 'rgba(200,235,255,' + (0.10 + 0.10 * ((b + 0.5) / 2 - 1)).toFixed(3) + ')';
+g.beginPath();
+for (let i = 0; i < a.length; i += 4) { g.moveTo(a[i], a[i + 1]); g.lineTo(a[i + 2], a[i + 3]); }
+g.stroke();
+}
 }
 function drawHazards(g) {
-  for (let i = 0; i < E.hazards.length; i++) {
-    const h = E.hazards[i];
-    const sx = w2sx(h.x, h.y), sy = w2sy(h.x, h.y);
-    const a = U.clamp(h.life / 8, 0, 1) * (0.3 + 0.12 * sin(R.time * 4 + i));
-    g.fillStyle = h.type === 'poison' ? 'rgba(110,190,60,' + a + ')' : 'rgba(230,110,40,' + a + ')';
-    g.beginPath(); g.ellipse(sx, sy, h.r * HW * R.zoom, h.r * HH * R.zoom, 0, 0, U.TAU); g.fill();
-    g.strokeStyle = h.type === 'poison' ? 'rgba(150,230,90,0.5)' : 'rgba(255,160,70,0.5)';
-    g.lineWidth = 2; g.stroke();
-    if (CR.streams && CR.streams.fx.chance(0.08)) {
-      spawnPart(h.x + (Math.random() - 0.5) * h.r, h.y + (Math.random() - 0.5) * h.r,
-        h.type === 'poison' ? 'smoke' : 'flame', h.type === 'poison' ? '#8ac04a' : '#ff8a30',
-        { z: 0.1, vz: 0.8, grav: -0.5, life: 0.7, size: 3 });
-    }
-  }
+for (let i = 0; i < E.hazards.length; i++) {
+const h = E.hazards[i];
+const sx = w2sx(h.x, h.y), sy = w2sy(h.x, h.y);
+const a = U.clamp(h.life / 8, 0, 1) * (0.3 + 0.12 * sin(R.time * 4 + i));
+g.fillStyle = h.type === 'poison' ? 'rgba(110,190,60,' + a + ')' : 'rgba(230,110,40,' + a + ')';
+g.beginPath(); g.ellipse(sx, sy, h.r * HW * R.zoom, h.r * HH * R.zoom, 0, 0, U.TAU); g.fill();
+g.strokeStyle = h.type === 'poison' ? 'rgba(150,230,90,0.5)' : 'rgba(255,160,70,0.5)';
+g.lineWidth = 2; g.stroke();
+if (CR.streams && CR.streams.fx.chance(0.08)) {
+spawnPart(h.x + (Math.random() - 0.5) * h.r, h.y + (Math.random() - 0.5) * h.r,
+h.type === 'poison' ? 'smoke' : 'flame', h.type === 'poison' ? '#8ac04a' : '#ff8a30',
+{ z: 0.1, vz: 0.8, grav: -0.5, life: 0.7, size: 3 });
 }
-/** Santuarios: frontera y nombre cuando el ajuste está activo. */
+}
+}
 function drawZones(g) {
-  if (!CR.Settings.values.showZones) return;
-  const p = E.player;
-  for (let i = 0; i < W.zones.length; i++) {
-    const z = W.zones[i];
-    if (p && U.dist2(p.t.x, p.t.y, z.x, z.y) > (z.r + 44) * (z.r + 44)) continue;
-    const zd = D.ZONE_BY_ID[z.id];
-    const col = zd ? zd.tint : '#d9a441';
-    const cx = w2sx(z.x, z.y), cy = w2sy(z.x, z.y);
-    const rx = z.r * HW * R.zoom, ry = z.r * HH * R.zoom;
-    if (cx + rx < -60 || cx - rx > R.vw + 60 || cy + ry < -60 || cy - ry > R.vh + 60) continue;
-    g.save();
-    g.setLineDash([10 * R.zoom, 8 * R.zoom]); g.lineDashOffset = -R.time * 10;
-    g.strokeStyle = rgba(col, 0.5); g.lineWidth = 2.2 * R.zoom;
-    g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, U.TAU); g.stroke();
-    g.restore();
-    g.fillStyle = rgba(col, 0.05);
-    g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, U.TAU); g.fill();
-    if (zd) {
-      const lf = '700 ' + Math.max(10, 13 * R.zoom) + 'px Georgia, serif';
-      g.font = lf; g.textAlign = 'center'; g.textBaseline = 'middle';
-      const tw = textW(g, lf, zd.name);
-      g.fillStyle = 'rgba(0,0,0,0.5)';
-      g.fillRect(cx - tw / 2 - 6, cy - ry - 20 * R.zoom, tw + 12, 18 * R.zoom);
-      g.fillStyle = col;
-      g.fillText(zd.name, cx, cy - ry - 11 * R.zoom);
-    }
-  }
+if (!CR.Settings.values.showZones) return;
+const p = E.player;
+for (let i = 0; i < W.zones.length; i++) {
+const z = W.zones[i];
+if (p && U.dist2(p.t.x, p.t.y, z.x, z.y) > (z.r + 44) * (z.r + 44)) continue;
+const zd = D.ZONE_BY_ID[z.id];
+const col = zd ? zd.tint : '#d9a441';
+const cx = w2sx(z.x, z.y), cy = w2sy(z.x, z.y);
+const rx = z.r * HW * R.zoom, ry = z.r * HH * R.zoom;
+if (cx + rx < -60 || cx - rx > R.vw + 60 || cy + ry < -60 || cy - ry > R.vh + 60) continue;
+g.save();
+g.setLineDash([10 * R.zoom, 8 * R.zoom]); g.lineDashOffset = -R.time * 10;
+g.strokeStyle = rgba(col, 0.5); g.lineWidth = 2.2 * R.zoom;
+g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, U.TAU); g.stroke();
+g.restore();
+g.fillStyle = rgba(col, 0.05);
+g.beginPath(); g.ellipse(cx, cy, rx, ry, 0, 0, U.TAU); g.fill();
+if (zd) {
+const lf = '700 ' + Math.max(10, 13 * R.zoom) + 'px Georgia, serif';
+g.font = lf; g.textAlign = 'center'; g.textBaseline = 'middle';
+const tw = textW(g, lf, zd.name);
+g.fillStyle = 'rgba(0,0,0,0.5)';
+g.fillRect(cx - tw / 2 - 6, cy - ry - 20 * R.zoom, tw + 12, 18 * R.zoom);
+g.fillStyle = col;
+g.fillText(zd.name, cx, cy - ry - 11 * R.zoom);
+}
+}
 }
 function drawCamps(g) {
-  const p = E.player;
-  if (!p) return;
-  for (let i = 0; i < W.camps.length; i++) {
-    const c = W.camps[i];
-    if (U.dist2(p.t.x, p.t.y, c.x, c.y) > 900) continue;
-    const cx = w2sx(c.x, c.y), cy = w2sy(c.x, c.y);
-    g.save();
-    g.setLineDash([6, 7]); g.lineDashOffset = R.time * 6;
-    g.strokeStyle = 'rgba(224,75,58,0.28)'; g.lineWidth = 1.6 * R.zoom;
-    g.beginPath(); g.ellipse(cx, cy, c.r * HW * R.zoom, c.r * HH * R.zoom, 0, 0, U.TAU); g.stroke();
-    g.restore();
-  }
+const p = E.player;
+if (!p) return;
+for (let i = 0; i < W.camps.length; i++) {
+const c = W.camps[i];
+if (U.dist2(p.t.x, p.t.y, c.x, c.y) > 900) continue;
+const cx = w2sx(c.x, c.y), cy = w2sy(c.x, c.y);
+g.save();
+g.setLineDash([6, 7]); g.lineDashOffset = R.time * 6;
+g.strokeStyle = 'rgba(224,75,58,0.28)'; g.lineWidth = 1.6 * R.zoom;
+g.beginPath(); g.ellipse(cx, cy, c.r * HW * R.zoom, c.r * HH * R.zoom, 0, 0, U.TAU); g.stroke();
+g.restore();
+}
 }
 const rainDrops = [];
 function drawRain(g, dt) {
-  const T = CR.Time;
-  if (!T || T.rain <= 0.02) { rainDrops.length = 0; return; }
-  const want = Math.round(150 * T.rain * R.quality);
-  while (rainDrops.length < want) rainDrops.push({ x: Math.random() * R.vw, y: Math.random() * R.vh, s: 0.6 + Math.random() * 0.8 });
-  while (rainDrops.length > want) rainDrops.pop();
-  g.strokeStyle = 'rgba(170,205,235,0.42)'; g.lineWidth = 1.2;
-  g.beginPath();
-  for (let i = 0; i < rainDrops.length; i++) {
-    const d = rainDrops[i];
-    d.y += (760 + d.s * 420) * dt; d.x += 150 * dt;
-    if (d.y > R.vh) { d.y = -12; d.x = Math.random() * R.vw; }
-    if (d.x > R.vw) d.x = 0;
-    g.moveTo(d.x, d.y); g.lineTo(d.x - 4 * d.s, d.y - 13 * d.s);
-  }
-  g.stroke();
+const T = CR.Time;
+if (!T || T.rain <= 0.02) { rainDrops.length = 0; return; }
+const want = Math.round(150 * T.rain * R.quality);
+while (rainDrops.length < want) rainDrops.push({ x: Math.random() * R.vw, y: Math.random() * R.vh, s: 0.6 + Math.random() * 0.8 });
+while (rainDrops.length > want) rainDrops.pop();
+g.strokeStyle = 'rgba(170,205,235,0.42)'; g.lineWidth = 1.2;
+g.beginPath();
+for (let i = 0; i < rainDrops.length; i++) {
+const d = rainDrops[i];
+d.y += (760 + d.s * 420) * dt; d.x += 150 * dt;
+if (d.y > R.vh) { d.y = -12; d.x = Math.random() * R.vw; }
+if (d.x > R.vw) d.x = 0;
+g.moveTo(d.x, d.y); g.lineTo(d.x - 4 * d.s, d.y - 13 * d.s);
+}
+g.stroke();
 }
 function drawAmbientMotes() {
-  const T = CR.Time;
-  if (!T) return;
-  if (T.night > 0.5 && CR.streams && CR.streams.fx.chance(0.25)) {
-    const p = E.player;
-    if (p) {
-      spawnPart(p.t.x + (Math.random() - 0.5) * 18, p.t.y + (Math.random() - 0.5) * 18, 'spark', '#c8e07a',
-        { z: 0.6 + Math.random(), vz: 0.15, grav: -0.05, life: 2.4, size: 1.6,
-          vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3 });
-    }
-  }
+const T = CR.Time;
+if (!T) return;
+if (T.night > 0.5 && CR.streams && CR.streams.fx.chance(0.25)) {
+const p = E.player;
+if (p) {
+spawnPart(p.t.x + (Math.random() - 0.5) * 18, p.t.y + (Math.random() - 0.5) * 18, 'spark', '#c8e07a',
+{ z: 0.6 + Math.random(), vz: 0.15, grav: -0.05, life: 2.4, size: 1.6,
+vx: (Math.random() - 0.5) * 0.3, vy: (Math.random() - 0.5) * 0.3 });
 }
-
+}
+}
 /* ==========================================================
-11 · ILUMINACIÓN · noche, antorchas y criaturas míticas
+11 · ILUMINACIÓN
 ========================================================== */
 const lights = [];
 const SPECIES_LIGHT = {
-  phoenix: [190, '#ff7030', 1], dragon_ember: [220, '#ff5020', 1],
-  nightmare: [110, '#c05ae0', 0.7], shadow_hound: [80, '#7a5ae0', 0.5],
-  warg: [62, '#ff4a3a', 0.32], hydra: [95, '#8ae04a', 0.4],
-  ember_sprite: [90, '#ff9a40', 0.7], salamander: [100, '#ff6030', 0.6],
-  willowisp: [110, '#bfe4f5', 0.75], unicorn: [120, '#e8e0ff', 0.6],
-  kirin: [120, '#8ad8c8', 0.6], pegasus: [100, '#cfe8ff', 0.5],
-  cerberus: [110, '#ff5030', 0.5], jotun_frost: [150, '#bfe4f5', 0.6],
-  gargoyle: [70, '#e04b3a', 0.35], golem: [70, '#8fd0f0', 0.35],
-  griffin: [70, '#f0d080', 0.3], basilisk: [80, '#96f04a', 0.35],
-  troll_king: [70, '#ffd040', 0.3], fenrir: [130, '#9a6ae0', 0.55]
+phoenix: [190, '#ff7030', 1], dragon_ember: [220, '#ff5020', 1],
+nightmare: [110, '#c05ae0', 0.7], shadow_hound: [80, '#7a5ae0', 0.5],
+warg: [62, '#ff4a3a', 0.32], hydra: [95, '#8ae04a', 0.4],
+ember_sprite: [90, '#ff9a40', 0.7], salamander: [100, '#ff6030', 0.6],
+willowisp: [110, '#bfe4f5', 0.75], unicorn: [120, '#e8e0ff', 0.6],
+kirin: [120, '#8ad8c8', 0.6], pegasus: [100, '#cfe8ff', 0.5],
+cerberus: [110, '#ff5030', 0.5], jotun_frost: [150, '#bfe4f5', 0.6],
+gargoyle: [70, '#e04b3a', 0.35], golem: [70, '#8fd0f0', 0.35],
+griffin: [70, '#f0d080', 0.3], basilisk: [80, '#96f04a', 0.35],
+troll_king: [70, '#ffd040', 0.3], fenrir: [130, '#9a6ae0', 0.55]
 };
 function collectLights(x0, y0, x1, y1) {
-  lights.length = 0;
-  const T = CR.Time;
-  const n = T ? T.night : 0;
-  const p = E.player;
-  /* Antorcha o farol equipado: luz propia incluso de día */
-  let carried = false;
-  if (p) {
-    const tl = p.equip ? p.equip.tool : null;
-    const td = tl ? D.ITEMS[tl.id] : null;
-    if (td && td.light) {
-      carried = true;
-      lights.push({ x: p.t.x, y: p.t.y, r: td.light, c: td.id === 'lantern' ? '#ffe0a0' : '#ffb060', i: 1 });
-    } else if (n > 0.04) {
-      lights.push({ x: p.t.x, y: p.t.y, r: 110, c: '#ffd9a0', i: 0.8 });
-    }
-  }
-  if (n < 0.04 && !carried && !W.zones.length) return;
-  for (let i = 0; i < W.buildings.length; i++) {
-    const b = W.buildings[i];
-    if (b.x + b.w < x0 || b.x > x1 || b.y + b.h < y0 || b.y > y1) continue;
-    const bd = D.BUILDINGS[b.key];
-    if (bd && bd.light) {
-      lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: bd.light,
-        c: b.key === 'lantern_post' ? '#ffe0a0' : '#ffb060', i: 1 });
-      continue;
-    }
-    const k = b.info ? b.info.kind : '';
-    if (b.key === 'campfire' || k === 'fire') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 150, c: '#ff9a40', i: 1 });
-    else if (k === 'smithy' || k === 'forge') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 130, c: '#ff7a30', i: 0.9 });
-    else if (k === 'church') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 140, c: '#ffd070', i: 0.7 });
-    else if (k === 'house' || k === 'bank' || k === 'steward' || k === 'barracks') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 100, c: '#ffcf90', i: 0.6 });
-    else if (k === 'stall') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 80, c: '#ffc070', i: 0.5 });
-    else if (k === 'fountain') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 70, c: '#bfe4f5', i: 0.35 });
-    else if (b.key === 'golem_pylon') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 90, c: '#8fd0f0', i: 0.5 });
-    else if (b.key === 'gargoyle_perch') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 70, c: '#e04b3a', i: 0.4 });
-  }
-  for (let i = 0; i < E.list.length; i++) {
-    const e = E.list[i];
-    if (e.tg.dead) continue;
-    const L = SPECIES_LIGHT[e.species];
-    if (L) lights.push({ x: e.t.x, y: e.t.y, r: L[0], c: L[1], i: L[2] });
-  }
-  for (let i = 0; i < E.projectiles.length; i++) {
-    const pr = E.projectiles[i];
-    if (pr.type === 'fire') lights.push({ x: pr.x, y: pr.y, r: 80, c: '#ff8a30', i: 0.9 });
-    else if (pr.type === 'ice') lights.push({ x: pr.x, y: pr.y, r: 60, c: '#bfe4f5', i: 0.6 });
-    else if (pr.type === 'wisp') lights.push({ x: pr.x, y: pr.y, r: 70, c: '#bfe4f5', i: 0.7 });
-    else if (pr.type === 'venom') lights.push({ x: pr.x, y: pr.y, r: 55, c: '#8ae04a', i: 0.5 });
-  }
-  for (let i = 0; i < E.hazards.length; i++) {
-    const h = E.hazards[i];
-    lights.push({ x: h.x, y: h.y, r: 70, c: h.type === 'poison' ? '#8ae04a' : '#ff8a30', i: 0.6 });
-  }
+lights.length = 0;
+const T = CR.Time;
+const n = T ? T.night : 0;
+const p = E.player;
+let carried = false;
+if (p) {
+const tl = p.equip ? p.equip.tool : null;
+const td = tl ? D.ITEMS[tl.id] : null;
+if (td && td.light) {
+carried = true;
+lights.push({ x: p.t.x, y: p.t.y, r: td.light, c: td.id === 'lantern' ? '#ffe0a0' : '#ffb060', i: 1 });
+} else if (n > 0.04) {
+lights.push({ x: p.t.x, y: p.t.y, r: 110, c: '#ffd9a0', i: 0.8 });
+}
+}
+if (n < 0.04 && !carried && !W.zones.length) return;
+for (let i = 0; i < W.buildings.length; i++) {
+const b = W.buildings[i];
+if (b.x + b.w < x0 || b.x > x1 || b.y + b.h < y0 || b.y > y1) continue;
+const bd = D.BUILDINGS[b.key];
+if (bd && bd.light) {
+lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: bd.light,
+c: b.key === 'lantern_post' ? '#ffe0a0' : '#ffb060', i: 1 });
+continue;
+}
+const k = b.info ? b.info.kind : '';
+if (b.key === 'campfire' || k === 'fire') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 150, c: '#ff9a40', i: 1 });
+else if (k === 'smithy' || k === 'forge') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 130, c: '#ff7a30', i: 0.9 });
+else if (k === 'church') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 140, c: '#ffd070', i: 0.7 });
+else if (k === 'house' || k === 'bank' || k === 'steward' || k === 'barracks') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 100, c: '#ffcf90', i: 0.6 });
+else if (k === 'stall') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 80, c: '#ffc070', i: 0.5 });
+else if (k === 'fountain') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 70, c: '#bfe4f5', i: 0.35 });
+else if (b.key === 'golem_pylon') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 90, c: '#8fd0f0', i: 0.5 });
+else if (b.key === 'gargoyle_perch') lights.push({ x: b.x + b.w / 2, y: b.y + b.h / 2, r: 70, c: '#e04b3a', i: 0.4 });
+}
+for (let i = 0; i < E.list.length; i++) {
+const e = E.list[i];
+if (e.tg.dead) continue;
+const L = SPECIES_LIGHT[e.species];
+if (L) lights.push({ x: e.t.x, y: e.t.y, r: L[0], c: L[1], i: L[2] });
+}
+for (let i = 0; i < E.projectiles.length; i++) {
+const pr = E.projectiles[i];
+if (pr.type === 'fire') lights.push({ x: pr.x, y: pr.y, r: 80, c: '#ff8a30', i: 0.9 });
+else if (pr.type === 'ice') lights.push({ x: pr.x, y: pr.y, r: 60, c: '#bfe4f5', i: 0.6 });
+else if (pr.type === 'wisp') lights.push({ x: pr.x, y: pr.y, r: 70, c: '#bfe4f5', i: 0.7 });
+else if (pr.type === 'venom') lights.push({ x: pr.x, y: pr.y, r: 55, c: '#8ae04a', i: 0.5 });
+}
+for (let i = 0; i < E.hazards.length; i++) {
+const h = E.hazards[i];
+lights.push({ x: h.x, y: h.y, r: 70, c: h.type === 'poison' ? '#8ae04a' : '#ff8a30', i: 0.6 });
+}
 }
 const _lsCache = Object.create(null);
 function lightSprite(key, stops) {
-  let c = _lsCache[key];
-  if (!c) {
-    c = document.createElement('canvas'); c.width = c.height = 128;
-    const x = c.getContext('2d');
-    const gr = x.createRadialGradient(64, 64, 0, 64, 64, 64);
-    for (let i = 0; i < stops.length; i++) gr.addColorStop(stops[i][0], stops[i][1]);
-    x.fillStyle = gr; x.fillRect(0, 0, 128, 128);
-    _lsCache[key] = c;
-  }
-  return c;
+let c = _lsCache[key];
+if (!c) {
+c = document.createElement('canvas'); c.width = c.height = 128;
+const x = c.getContext('2d');
+const gr = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+for (let i = 0; i < stops.length; i++) gr.addColorStop(stops[i][0], stops[i][1]);
+x.fillStyle = gr; x.fillRect(0, 0, 128, 128);
+_lsCache[key] = c;
+}
+return c;
 }
 function lightHole(i) {
-  const k = Math.round(i * 20) / 20;
-  return lightSprite('h' + k, [[0, 'rgba(0,0,0,' + k + ')'], [0.55, 'rgba(0,0,0,' + (k * 0.5) + ')'], [1, 'rgba(0,0,0,0)']]);
+const k = Math.round(i * 20) / 20;
+return lightSprite('h' + k, [[0, 'rgba(0,0,0,' + k + ')'], [0.55, 'rgba(0,0,0,' + (k * 0.5) + ')'], [1, 'rgba(0,0,0,0)']]);
 }
 function lightHalo(c) { return lightSprite('o' + c, [[0, rgba(c, 0.16)], [1, rgba(c, 0)]]); }
 function drawLighting(g) {
-  const T = CR.Time;
-  const n = T ? T.night : 0;
-  if (!lightCv || !lights.length) return;
-  const lw = lightCv.width, lh = lightCv.height;
-  const lg = lightCtx;
-  if (n >= 0.03) {
-    const dusk = U.clamp((n - 0.1) / 0.45, 0, 1);
-    const col = mix('#4a2410', '#0a1038', dusk);
-    lg.setTransform(1, 0, 0, 1, 0, 0);
-    lg.globalCompositeOperation = 'source-over';
-    lg.clearRect(0, 0, lw, lh);
-    lg.fillStyle = rgba(col, n * 0.66);
-    lg.fillRect(0, 0, lw, lh);
-    lg.globalCompositeOperation = 'destination-out';
-    const sc = lw / R.vw;
-    for (let i = 0; i < lights.length; i++) {
-      const L = lights[i];
-      const sx = w2sx(L.x, L.y) * sc, sy = w2sy(L.x, L.y) * sc;
-      const rr = L.r * R.zoom * sc * (0.94 + 0.06 * sin(R.time * 6 + i));
-      if (sx < -rr || sy < -rr || sx > lw + rr || sy > lh + rr) continue;
-      lg.drawImage(lightHole(L.i), sx - rr, sy - rr, rr * 2, rr * 2);
-    }
-    lg.globalCompositeOperation = 'source-over';
-    g.drawImage(lightCv, 0, 0, R.vw, R.vh);
-  }
-  /* Halo cálido aditivo: se ve incluso de día con antorcha o criatura mítica */
-  g.globalCompositeOperation = 'lighter';
-  const haloA = Math.max(0.25, n);
-  for (let i = 0; i < lights.length; i++) {
-    const L = lights[i];
-    const sx = w2sx(L.x, L.y), sy = w2sy(L.x, L.y);
-    const rr = L.r * R.zoom * 0.55;
-    if (sx < -rr || sy < -rr || sx > R.vw + rr || sy > R.vh + rr) continue;
-    g.globalAlpha = haloA * L.i;
-    g.drawImage(lightHalo(L.c), sx - rr, sy - rr, rr * 2, rr * 2);
-  }
-  g.globalAlpha = 1;
-  g.globalCompositeOperation = 'source-over';
+const T = CR.Time;
+const n = T ? T.night : 0;
+if (!lightCv || !lights.length) return;
+const lw = lightCv.width, lh = lightCv.height;
+const lg = lightCtx;
+if (n >= 0.03) {
+const dusk = U.clamp((n - 0.1) / 0.45, 0, 1);
+const col = mix('#4a2410', '#0a1038', dusk);
+lg.setTransform(1, 0, 0, 1, 0, 0);
+lg.globalCompositeOperation = 'source-over';
+lg.clearRect(0, 0, lw, lh);
+lg.fillStyle = rgba(col, n * 0.66);
+lg.fillRect(0, 0, lw, lh);
+lg.globalCompositeOperation = 'destination-out';
+const sc = lw / R.vw;
+for (let i = 0; i < lights.length; i++) {
+const L = lights[i];
+const sx = w2sx(L.x, L.y) * sc, sy = w2sy(L.x, L.y) * sc;
+const rr = L.r * R.zoom * sc * (0.94 + 0.06 * sin(R.time * 6 + i));
+if (sx < -rr || sy < -rr || sx > lw + rr || sy > lh + rr) continue;
+lg.drawImage(lightHole(L.i), sx - rr, sy - rr, rr * 2, rr * 2);
+}
+lg.globalCompositeOperation = 'source-over';
+g.drawImage(lightCv, 0, 0, R.vw, R.vh);
+}
+g.globalCompositeOperation = 'lighter';
+const haloA = Math.max(0.25, n);
+for (let i = 0; i < lights.length; i++) {
+const L = lights[i];
+const sx = w2sx(L.x, L.y), sy = w2sy(L.x, L.y);
+const rr = L.r * R.zoom * 0.55;
+if (sx < -rr || sy < -rr || sx > R.vw + rr || sy > R.vh + rr) continue;
+g.globalAlpha = haloA * L.i;
+g.drawImage(lightHalo(L.c), sx - rr, sy - rr, rr * 2, rr * 2);
+}
+g.globalAlpha = 1;
+g.globalCompositeOperation = 'source-over';
 }
 /* ==========================================================
-12 · MINIMAPA (512² con santuarios y parcelas)
+12 · MINIMAPA
 ========================================================== */
 function buildMap() {
-  if (!W.ready) return;
-  if (!mapCv) {
-    mapCv = document.createElement('canvas');
-    mapCv.width = C.WORLD; mapCv.height = C.WORLD;
-    mapCtx = mapCv.getContext('2d');
-  }
-  const img = mapCtx.createImageData(C.WORLD, C.WORLD);
-  const d = img.data;
-  const cWall = rgb('#6a5a44'), cRoad = rgb('#9a7f52'), cFloor = rgb('#b8ae96');
-  const cFarm = rgb('#8a6a44'), cTilled = rgb('#6b4f30'), cParcel = rgb('#9a8a5e');
-  const cWater = [], cBase = [];
-  for (let b = 0; b < D.BIOMES.length; b++) {
-    cWater[b] = rgb(D.BIOMES[b].water);
-    cBase[b] = rgb(D.BIOMES[b].base);
-  }
-  const zc = [];
-  for (let i = 0; i < W.zones.length; i++) {
-    const zd = D.ZONE_BY_ID[W.zones[i].id];
-    zc.push(zd ? rgb(zd.tint) : cBase[0]);
-  }
-  const N = C.WORLD * C.WORLD;
-  for (let i = 0; i < N; i++) {
-    const f = W.flags[i], b = W.biome[i];
-    let c;
-    if (f & W.F.WATER) c = cWater[b];
-    else if (f & W.F.WALL) c = cWall;
-    else if (f & W.F.ROAD) c = cRoad;
-    else if (f & W.F.FLOOR) c = cFloor;
-    else if (f & W.F.TILLED) c = cTilled;
-    else if (f & W.F.FARM) c = cFarm;
-    else if (f & W.F.PARCEL) c = cParcel;
-    else c = cBase[b];
-    const reg = W.region ? W.region[i] : 0;
-    if (reg && !(f & (W.F.WATER | W.F.WALL | W.F.ROAD | W.F.FLOOR))) {
-      const t = zc[reg - 1] || c;
-      c = { r: (c.r * 0.78 + t.r * 0.22) | 0, g: (c.g * 0.78 + t.g * 0.22) | 0, b: (c.b * 0.78 + t.b * 0.22) | 0 };
-    }
-    const o = i * 4;
-    d[o] = c.r; d[o + 1] = c.g; d[o + 2] = c.b; d[o + 3] = 255;
-  }
-  mapCtx.putImageData(img, 0, 0);
-  R._mapDirty = false;
+if (!W.ready) return;
+if (!mapCv) {
+mapCv = document.createElement('canvas');
+mapCv.width = C.WORLD; mapCv.height = C.WORLD;
+mapCtx = mapCv.getContext('2d');
+}
+const img = mapCtx.createImageData(C.WORLD, C.WORLD);
+const d = img.data;
+const cWall = rgb('#6a5a44'), cRoad = rgb('#9a7f52'), cFloor = rgb('#b8ae96');
+const cFarm = rgb('#8a6a44'), cTilled = rgb('#6b4f30'), cParcel = rgb('#9a8a5e');
+const cWater = [], cBase = [];
+for (let b = 0; b < D.BIOMES.length; b++) {
+cWater[b] = rgb(D.BIOMES[b].water);
+cBase[b] = rgb(D.BIOMES[b].base);
+}
+const zc = [];
+for (let i = 0; i < W.zones.length; i++) {
+const zd = D.ZONE_BY_ID[W.zones[i].id];
+zc.push(zd ? rgb(zd.tint) : cBase[0]);
+}
+const N = C.WORLD * C.WORLD;
+for (let i = 0; i < N; i++) {
+const f = W.flags[i], b = W.biome[i];
+let c;
+if (f & W.F.WATER) c = cWater[b];
+else if (f & W.F.WALL) c = cWall;
+else if (f & W.F.ROAD) c = cRoad;
+else if (f & W.F.FLOOR) c = cFloor;
+else if (f & W.F.TILLED) c = cTilled;
+else if (f & W.F.FARM) c = cFarm;
+else if (f & W.F.PARCEL) c = cParcel;
+else c = cBase[b];
+const reg = W.region ? W.region[i] : 0;
+if (reg && !(f & (W.F.WATER | W.F.WALL | W.F.ROAD | W.F.FLOOR))) {
+const t = zc[reg - 1] || c;
+c = { r: (c.r * 0.78 + t.r * 0.22) | 0, g: (c.g * 0.78 + t.g * 0.22) | 0, b: (c.b * 0.78 + t.b * 0.22) | 0 };
+}
+const o = i * 4;
+d[o] = c.r; d[o + 1] = c.g; d[o + 2] = c.b; d[o + 3] = 255;
+}
+mapCtx.putImageData(img, 0, 0);
+R._mapDirty = false;
 }
 R.getMapCanvas = function () { if (R._mapDirty) buildMap(); return mapCv; };
-
 function drawMinimap() {
-  if (!R.mini || !W.ready) return;
-  if (R._mapDirty) buildMap();
-  if (!mapCv) return;
-  const g = R.mctx, w = R.mini.width, h = R.mini.height;
-  const p = E.player;
-  const span = 96;
-  const cx = p ? p.t.x : (W.city ? W.city.x + W.city.w / 2 : C.WORLD / 2);
-  const cy = p ? p.t.y : (W.city ? W.city.y + W.city.h / 2 : C.WORLD / 2);
-  const sx = U.clamp(cx - span / 2, 0, C.WORLD - span);
-  const sy = U.clamp(cy - span / 2, 0, C.WORLD - span);
-  g.setTransform(1, 0, 0, 1, 0, 0);
-  g.clearRect(0, 0, w, h);
-  g.imageSmoothingEnabled = false;
-  g.drawImage(mapCv, sx, sy, span, span, 0, 0, w, h);
-  const k = w / span;
-  const mx = function (x) { return (x - sx) * k; }, my = function (y) { return (y - sy) * k; };
-
-  /* Santuarios */
-  if (CR.Settings.values.showZones) {
-    for (let i = 0; i < W.zones.length; i++) {
-      const z = W.zones[i], zd = D.ZONE_BY_ID[z.id];
-      const zx = mx(z.x), zy = my(z.y), zr = z.r * k;
-      if (zx + zr < 0 || zx - zr > w || zy + zr < 0 || zy - zr > h) continue;
-      g.strokeStyle = zd ? rgba(zd.tint, 0.8) : 'rgba(217,164,65,0.8)';
-      g.lineWidth = 1.4;
-      g.beginPath(); g.arc(zx, zy, zr, 0, U.TAU); g.stroke();
-    }
-  }
-  /* Parcelas propias */
-  const owned = W.ownedParcels();
-  g.strokeStyle = 'rgba(217,164,65,0.9)'; g.lineWidth = 1.5;
-  for (let i = 0; i < owned.length; i++) {
-    const pa = owned[i];
-    g.strokeRect(mx(pa.x), my(pa.y), pa.w * k, pa.h * k);
-  }
-  /* Granjas NPC */
-  g.strokeStyle = 'rgba(122,174,78,0.55)'; g.lineWidth = 1;
-  for (let i = 0; i < W.farms.length; i++) {
-    const fa = W.farms[i];
-    g.strokeRect(mx(fa.x), my(fa.y), fa.w * k, fa.h * k);
-  }
-  /* Ciudad */
-  if (W.city) {
-    g.strokeStyle = 'rgba(240,225,190,0.75)'; g.lineWidth = 1.5;
-    g.strokeRect(mx(W.city.x), my(W.city.y), W.city.w * k, W.city.h * k);
-  }
-  /* Entidades */
-  for (let i = 0; i < E.list.length; i++) {
-    const e = E.list[i];
-    if (e.tg.dead) continue;
-    let col = null, r = 2;
-    if (e.type === 'npc') { col = e.tg.wanderer ? '#e8a840' : '#f3cf7a'; r = 2.4; }
-    else if (e.tg.boss) { col = '#e04b3a'; r = 3.4; }
-    else if (e.tg.guardian) { col = '#8fd0f0'; r = 2.2; }
-    else if (e.tg.tamed && e.tg.owner === 'player') { col = '#3fbf6f'; r = 2; }
-    else if (e.type === 'guard') { col = '#5aa7e0'; r = 2; }
-    else if (e.species === 'bandit') { col = '#c0392b'; r = 2; }
-    else if (e.tg.hostile) { col = 'rgba(220,90,70,0.75)'; r = 1.6; }
-    if (!col) continue;
-    const x = mx(e.t.x), y = my(e.t.y);
-    if (x < 0 || y < 0 || x > w || y > h) continue;
-    g.fillStyle = col;
-    g.beginPath(); g.arc(x, y, r, 0, U.TAU); g.fill();
-  }
-  /* Tarea de ayuda activa */
-  const hp = CR.Sys ? CR.Sys.help : null;
-  if (hp) {
-    for (let i = 0; i < W.farms.length; i++) {
-      if (W.farms[i].owner !== hp.npcId) continue;
-      const fa = W.farms[i];
-      const x = mx(fa.x + fa.w / 2), y = my(fa.y + fa.h / 2);
-      g.strokeStyle = hp.done >= hp.need ? '#3fbf6f' : '#f3cf7a';
-      g.lineWidth = 1.8;
-      g.beginPath(); g.arc(x, y, 4.5, 0, U.TAU); g.stroke();
-      break;
-    }
-  }
-  /* Jugador */
-  if (p) {
-    const x = mx(p.t.x), y = my(p.t.y);
-    g.fillStyle = '#fff'; g.beginPath(); g.arc(x, y, 3.2, 0, U.TAU); g.fill();
-    g.strokeStyle = '#d9a441'; g.lineWidth = 1.6; g.stroke();
-    g.strokeStyle = 'rgba(255,255,255,0.6)'; g.lineWidth = 1.2;
-    g.beginPath(); g.moveTo(x, y); g.lineTo(x + cos(p.t.ang) * 7, y + sin(p.t.ang) * 7); g.stroke();
-  }
-  /* Rosa de vientos dibujada (sin glifos de fuente) */
-  g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(w - 20, 4, 16, 16);
-  g.fillStyle = '#efe3c8';
-  g.beginPath(); g.moveTo(w - 12, 6); g.lineTo(w - 9, 15); g.lineTo(w - 12, 12.6); g.lineTo(w - 15, 15); g.closePath(); g.fill();
-  g.fillStyle = '#d9a441';
-  g.beginPath(); g.moveTo(w - 12, 6); g.lineTo(w - 9, 15); g.lineTo(w - 12, 12.6); g.closePath(); g.fill();
+if (!R.mini || !W.ready) return;
+if (R._mapDirty) buildMap();
+if (!mapCv) return;
+const g = R.mctx, w = R.mini.width, h = R.mini.height;
+const p = E.player;
+const span = 96;
+const cx = p ? p.t.x : (W.city ? W.city.x + W.city.w / 2 : C.WORLD / 2);
+const cy = p ? p.t.y : (W.city ? W.city.y + W.city.h / 2 : C.WORLD / 2);
+const sx = U.clamp(cx - span / 2, 0, C.WORLD - span);
+const sy = U.clamp(cy - span / 2, 0, C.WORLD - span);
+g.setTransform(1, 0, 0, 1, 0, 0);
+g.clearRect(0, 0, w, h);
+g.imageSmoothingEnabled = false;
+g.drawImage(mapCv, sx, sy, span, span, 0, 0, w, h);
+const k = w / span;
+const mx = function (x) { return (x - sx) * k; }, my = function (y) { return (y - sy) * k; };
+if (CR.Settings.values.showZones) {
+for (let i = 0; i < W.zones.length; i++) {
+const z = W.zones[i], zd = D.ZONE_BY_ID[z.id];
+const zx = mx(z.x), zy = my(z.y), zr = z.r * k;
+if (zx + zr < 0 || zx - zr > w || zy + zr < 0 || zy - zr > h) continue;
+g.strokeStyle = zd ? rgba(zd.tint, 0.8) : 'rgba(217,164,65,0.8)';
+g.lineWidth = 1.4;
+g.beginPath(); g.arc(zx, zy, zr, 0, U.TAU); g.stroke();
 }
-
+}
+const owned = W.ownedParcels();
+g.strokeStyle = 'rgba(217,164,65,0.9)'; g.lineWidth = 1.5;
+for (let i = 0; i < owned.length; i++) {
+const pa = owned[i];
+g.strokeRect(mx(pa.x), my(pa.y), pa.w * k, pa.h * k);
+}
+g.strokeStyle = 'rgba(122,174,78,0.55)'; g.lineWidth = 1;
+for (let i = 0; i < W.farms.length; i++) {
+const fa = W.farms[i];
+g.strokeRect(mx(fa.x), my(fa.y), fa.w * k, fa.h * k);
+}
+if (W.city) {
+g.strokeStyle = 'rgba(240,225,190,0.75)'; g.lineWidth = 1.5;
+g.strokeRect(mx(W.city.x), my(W.city.y), W.city.w * k, W.city.h * k);
+}
+for (let i = 0; i < E.list.length; i++) {
+const e = E.list[i];
+if (e.tg.dead) continue;
+let col = null, r = 2;
+if (e.type === 'npc') { col = e.tg.wanderer ? '#e8a840' : '#f3cf7a'; r = 2.4; }
+else if (e.tg.boss) { col = '#e04b3a'; r = 3.4; }
+else if (e.tg.guardian) { col = '#8fd0f0'; r = 2.2; }
+else if (e.tg.tamed && e.tg.owner === 'player') { col = '#3fbf6f'; r = 2; }
+else if (e.type === 'guard') { col = '#5aa7e0'; r = 2; }
+else if (e.species === 'bandit') { col = '#c0392b'; r = 2; }
+else if (e.tg.hostile) { col = 'rgba(220,90,70,0.75)'; r = 1.6; }
+if (!col) continue;
+const x = mx(e.t.x), y = my(e.t.y);
+if (x < 0 || y < 0 || x > w || y > h) continue;
+g.fillStyle = col;
+g.beginPath(); g.arc(x, y, r, 0, U.TAU); g.fill();
+}
+const hp = CR.Sys ? CR.Sys.help : null;
+if (hp) {
+for (let i = 0; i < W.farms.length; i++) {
+if (W.farms[i].owner !== hp.npcId) continue;
+const fa = W.farms[i];
+const x = mx(fa.x + fa.w / 2), y = my(fa.y + fa.h / 2);
+g.strokeStyle = hp.done >= hp.need ? '#3fbf6f' : '#f3cf7a';
+g.lineWidth = 1.8;
+g.beginPath(); g.arc(x, y, 4.5, 0, U.TAU); g.stroke();
+break;
+}
+}
+if (p) {
+const x = mx(p.t.x), y = my(p.t.y);
+g.fillStyle = '#fff'; g.beginPath(); g.arc(x, y, 3.2, 0, U.TAU); g.fill();
+g.strokeStyle = '#d9a441'; g.lineWidth = 1.6; g.stroke();
+g.strokeStyle = 'rgba(255,255,255,0.6)'; g.lineWidth = 1.2;
+g.beginPath(); g.moveTo(x, y); g.lineTo(x + cos(p.t.ang) * 7, y + sin(p.t.ang) * 7); g.stroke();
+}
+g.fillStyle = 'rgba(0,0,0,0.45)'; g.fillRect(w - 20, 4, 16, 16);
+g.fillStyle = '#efe3c8';
+g.beginPath(); g.moveTo(w - 12, 6); g.lineTo(w - 9, 15); g.lineTo(w - 12, 12.6); g.lineTo(w - 15, 15); g.closePath(); g.fill();
+g.fillStyle = '#d9a441';
+g.beginPath(); g.moveTo(w - 12, 6); g.lineTo(w - 9, 15); g.lineTo(w - 12, 12.6); g.closePath(); g.fill();
+}
 /* ==========================================================
-13 · FONDO DE TÍTULO (mundo aún sin generar)
+13 · FONDO DE TÍTULO
 ========================================================== */
 function drawTitleBackdrop(g, dt) {
-  const gr = g.createLinearGradient(0, 0, R.vw, R.vh);
-  gr.addColorStop(0, '#12100a'); gr.addColorStop(0.5, '#1c150c'); gr.addColorStop(1, '#0a0c10');
-  g.fillStyle = gr; g.fillRect(0, 0, R.vw, R.vh);
-  g.save();
-  g.globalAlpha = 0.16;
-  g.strokeStyle = '#d9a441'; g.lineWidth = 1;
-  const off = (R.time * 12) % 64;
-  for (let i = -20; i < 40; i++) {
-    const x = i * 64 + off;
-    g.beginPath(); g.moveTo(x, 0); g.lineTo(x + R.vh * 2, R.vh); g.stroke();
-    g.beginPath(); g.moveTo(x, 0); g.lineTo(x - R.vh * 2, R.vh); g.stroke();
-  }
-  g.restore();
-  /* Ascuas ascendentes */
-  if (Math.random() < 0.4) {
-    const p = partPool.acquire();
-    if (p) {
-      p.screen = true; p.x = Math.random() * R.vw; p.y = R.vh + 10;
-      p.vx = (Math.random() - 0.5) * 12; p.vy = -18 - Math.random() * 26;
-      p.vz = 0; p.grav = 0;
-      p.max = p.life = 4 + Math.random() * 3;
-      p.size = 1.4 + Math.random() * 2; p.col = '#e8a840'; p.kind = 'spark';
-      parts.push(p);
-    }
-  }
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const p = parts[i];
-    p.life -= dt;
-    if (p.life <= 0) { parts.splice(i, 1); partPool.release(p); continue; }
-    p.x += p.vx * dt; p.y += p.vy * dt;
-    g.globalAlpha = U.clamp(p.life / p.max, 0, 1) * 0.7;
-    ellipse(g, p.x, p.y, p.size, p.size, p.col);
-    g.globalAlpha = 1;
-  }
+const gr = g.createLinearGradient(0, 0, R.vw, R.vh);
+gr.addColorStop(0, '#12100a'); gr.addColorStop(0.5, '#1c150c'); gr.addColorStop(1, '#0a0c10');
+g.fillStyle = gr; g.fillRect(0, 0, R.vw, R.vh);
+g.save();
+g.globalAlpha = 0.16;
+g.strokeStyle = '#d9a441'; g.lineWidth = 1;
+const off = (R.time * 12) % 64;
+for (let i = -20; i < 40; i++) {
+const x = i * 64 + off;
+g.beginPath(); g.moveTo(x, 0); g.lineTo(x + R.vh * 2, R.vh); g.stroke();
+g.beginPath(); g.moveTo(x, 0); g.lineTo(x - R.vh * 2, R.vh); g.stroke();
 }
-
+g.restore();
+if (Math.random() < 0.4) {
+const p = partPool.acquire();
+if (p) {
+p.screen = true; p.x = Math.random() * R.vw; p.y = R.vh + 10;
+p.vx = (Math.random() - 0.5) * 12; p.vy = -18 - Math.random() * 26;
+p.vz = 0; p.grav = 0;
+p.max = p.life = 4 + Math.random() * 3;
+p.size = 1.4 + Math.random() * 2; p.col = '#e8a840'; p.kind = 'spark';
+parts.push(p);
+}
+}
+for (let i = parts.length - 1; i >= 0; i--) {
+const p = parts[i];
+p.life -= dt;
+if (p.life <= 0) { parts.splice(i, 1); partPool.release(p); continue; }
+p.x += p.vx * dt; p.y += p.vy * dt;
+g.globalAlpha = U.clamp(p.life / p.max, 0, 1) * 0.7;
+ellipse(g, p.x, p.y, p.size, p.size, p.col);
+g.globalAlpha = 1;
+}
+}
 /* ==========================================================
-14 · HUD DE MUNDO
+14 · HUD DE MUNDO · pesca compacta v5
 ========================================================== */
 function drawInteractHint(g) {
-  const it = R.interact;
-  if (!it) return;
-  let x = 0, y = 0, r = 0.6;
-  if (it.kind === 'npc' || it.kind === 'tame' || it.kind === 'mount' || it.kind === 'pet' || it.kind === 'livestock') {
-    x = it.target.t.x; y = it.target.t.y; r = 0.55 * (it.target.tg.scale || 1);
-  } else if (it.kind === 'loot') { x = it.target.x; y = it.target.y; r = 0.5; }
-  else if (it.kind === 'node' || it.kind === 'node-tool') { x = it.target.x + 0.5; y = it.target.y + 0.5; }
-  else if (it.kind === 'soil' || it.kind === 'till' || it.kind === 'fish' || it.kind === 'parcel') { x = it.target.x + 0.5; y = it.target.y + 0.5; }
-  else if (it.kind === 'building') { x = it.target.x + it.target.w / 2; y = it.target.y + it.target.h / 2; r = 1.2; }
-  else return;
-  const sx = w2sx(x, y), sy = w2sy(x, y);
-  const pulse = 0.55 + 0.25 * sin(R.time * 4);
-  g.strokeStyle = 'rgba(243,207,122,' + pulse + ')';
-  g.lineWidth = 2 * R.zoom;
-  g.setLineDash([6 * R.zoom, 4 * R.zoom]);
-  g.lineDashOffset = -R.time * 14;
-  g.beginPath(); g.ellipse(sx, sy, r * HW * R.zoom * 1.2, r * HH * R.zoom * 1.2, 0, 0, U.TAU); g.stroke();
-  g.setLineDash([]);
+const it = R.interact;
+if (!it) return;
+let x = 0, y = 0, r = 0.6;
+if (it.kind === 'npc' || it.kind === 'tame' || it.kind === 'mount' || it.kind === 'pet' || it.kind === 'livestock') {
+x = it.target.t.x; y = it.target.t.y; r = 0.55 * (it.target.tg.scale || 1);
+} else if (it.kind === 'loot') { x = it.target.x; y = it.target.y; r = 0.5; }
+else if (it.kind === 'node' || it.kind === 'node-tool') { x = it.target.x + 0.5; y = it.target.y + 0.5; }
+else if (it.kind === 'soil' || it.kind === 'till' || it.kind === 'fish' || it.kind === 'parcel') { x = it.target.x + 0.5; y = it.target.y + 0.5; }
+else if (it.kind === 'building') { x = it.target.x + it.target.w / 2; y = it.target.y + it.target.h / 2; r = 1.2; }
+else return;
+const sx = w2sx(x, y), sy = w2sy(x, y);
+const pulse = 0.55 + 0.25 * sin(R.time * 4);
+g.strokeStyle = 'rgba(243,207,122,' + pulse + ')';
+g.lineWidth = 2 * R.zoom;
+g.setLineDash([6 * R.zoom, 4 * R.zoom]);
+g.lineDashOffset = -R.time * 14;
+g.beginPath(); g.ellipse(sx, sy, r * HW * R.zoom * 1.2, r * HH * R.zoom * 1.2, 0, 0, U.TAU); g.stroke();
+g.setLineDash([]);
 }
+/* v5 · Pesca: solo barra de progreso sobre el agua, sin texto ni toasts */
 function drawFishing(g) {
-  const f = CR.Sys ? CR.Sys.fishing : null;
-  const p = E.player;
-  if (!f || !p) return;
-  const sx = w2sx(f.spot.x + 0.5, f.spot.y + 0.5), sy = w2sy(f.spot.x + 0.5, f.spot.y + 0.5);
-  const bob = sin(R.time * 3) * 2;
-  const px = w2sx(p.t.x, p.t.y), py = w2sy(p.t.x, p.t.y) - 24 * R.zoom;
-  g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1.2;
-  g.beginPath(); g.moveTo(px + 10 * R.zoom, py);
-  g.quadraticCurveTo((px + sx) / 2, Math.min(py, sy) - 20, sx, sy + bob); g.stroke();
-  ellipse(g, sx, sy + bob, 4 * R.zoom, 4 * R.zoom, '#e04b3a');
-  ellipse(g, sx, sy + bob - 1.4 * R.zoom, 2 * R.zoom, 2 * R.zoom, '#f8f0e0');
-  const rip = (R.time * 1.4) % 1;
-  g.strokeStyle = 'rgba(200,235,255,' + (0.5 * (1 - rip)) + ')'; g.lineWidth = 1.6;
-  g.beginPath(); g.ellipse(sx, sy + bob, (6 + rip * 16) * R.zoom, (3 + rip * 8) * R.zoom, 0, 0, U.TAU); g.stroke();
-  const bw = 92, bh = 10, bx = px - bw / 2, by = py - 40;
-  g.fillStyle = 'rgba(0,0,0,0.62)'; g.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
-  g.textAlign = 'center'; g.textBaseline = 'middle';
-  if (f.phase === 'wait') {
-    g.fillStyle = '#5aa7e0'; g.fillRect(bx, by, bw * 0.35, bh);
-    g.fillStyle = '#efe3c8'; g.font = '700 10px system-ui, sans-serif';
-    g.fillText('esperando…', px, by + bh / 2);
-  } else {
-    const t = U.clamp(f.t / f.window, 0, 1);
-    g.fillStyle = t > 0.4 ? '#3fbf6f' : '#e04b3a';
-    g.fillRect(bx, by, bw * t, bh);
-    g.fillStyle = '#0c0a07'; g.font = '800 10px system-ui, sans-serif';
-    g.fillText('¡TIRA!', px, by + bh / 2);
-    g.strokeStyle = 'rgba(243,207,122,' + (0.5 + 0.5 * sin(R.time * 18)) + ')'; g.lineWidth = 3;
-    g.beginPath(); g.ellipse(sx, sy, 22 * R.zoom, 11 * R.zoom, 0, 0, U.TAU); g.stroke();
-  }
+const f = CR.Sys ? CR.Sys.fishing : null;
+const p = E.player;
+if (!f || !p) return;
+const sx = w2sx(f.spot.x + 0.5, f.spot.y + 0.5), sy = w2sy(f.spot.x + 0.5, f.spot.y + 0.5);
+const bob = sin(R.time * 3) * 2;
+const px = w2sx(p.t.x, p.t.y), py = w2sy(p.t.x, p.t.y) - 24 * R.zoom;
+g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1.2;
+g.beginPath(); g.moveTo(px + 10 * R.zoom, py);
+g.quadraticCurveTo((px + sx) / 2, Math.min(py, sy) - 20, sx, sy + bob); g.stroke();
+ellipse(g, sx, sy + bob, 4 * R.zoom, 4 * R.zoom, '#e04b3a');
+ellipse(g, sx, sy + bob - 1.4 * R.zoom, 2 * R.zoom, 2 * R.zoom, '#f8f0e0');
+const rip = (R.time * 1.4) % 1;
+g.strokeStyle = 'rgba(200,235,255,' + (0.5 * (1 - rip)) + ')'; g.lineWidth = 1.6;
+g.beginPath(); g.ellipse(sx, sy, (6 + rip * 16) * R.zoom, (3 + rip * 8) * R.zoom, 0, 0, U.TAU); g.stroke();
+const bw = 92, bh = 10, bx = px - bw / 2, by = py - 40;
+g.fillStyle = 'rgba(0,0,0,0.62)'; g.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
+if (f.phase === 'wait') {
+g.fillStyle = '#5aa7e0'; g.fillRect(bx, by, bw * 0.35, bh);
+} else {
+const t = U.clamp(f.t / f.window, 0, 1);
+g.fillStyle = t > 0.4 ? '#3fbf6f' : '#e04b3a';
+g.fillRect(bx, by, bw * t, bh);
+g.strokeStyle = 'rgba(243,207,122,' + (0.5 + 0.5 * sin(R.time * 18)) + ')'; g.lineWidth = 3;
+g.beginPath(); g.ellipse(sx, sy, 22 * R.zoom, 11 * R.zoom, 0, 0, U.TAU); g.stroke();
+}
 }
 function drawParcelOverlay(g) {
-  const p = E.player;
-  if (!p) return;
-  const owned = W.ownedParcels();
-  g.lineWidth = 1.6;
-  for (let i = 0; i < owned.length; i++) {
-    const pa = owned[i];
-    if (U.dist2(p.t.x, p.t.y, pa.x + pa.w / 2, pa.y + pa.h / 2) > 1600) continue;
-    const ax = w2sx(pa.x, pa.y), ay = w2sy(pa.x, pa.y);
-    const bx = w2sx(pa.x + pa.w, pa.y), by = w2sy(pa.x + pa.w, pa.y);
-    const cx = w2sx(pa.x + pa.w, pa.y + pa.h), cy = w2sy(pa.x + pa.w, pa.y + pa.h);
-    const dx = w2sx(pa.x, pa.y + pa.h), dy = w2sy(pa.x, pa.y + pa.h);
-    g.strokeStyle = 'rgba(217,164,65,0.35)';
-    g.setLineDash([7, 6]); g.lineDashOffset = -R.time * 8;
-    g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cx, cy); g.lineTo(dx, dy); g.closePath(); g.stroke();
-    g.setLineDash([]);
-  }
+const p = E.player;
+if (!p) return;
+const owned = W.ownedParcels();
+g.lineWidth = 1.6;
+for (let i = 0; i < owned.length; i++) {
+const pa = owned[i];
+if (U.dist2(p.t.x, p.t.y, pa.x + pa.w / 2, pa.y + pa.h / 2) > 1600) continue;
+const ax = w2sx(pa.x, pa.y), ay = w2sy(pa.x, pa.y);
+const bx = w2sx(pa.x + pa.w, pa.y), by = w2sy(pa.x + pa.w, pa.y);
+const cx = w2sx(pa.x + pa.w, pa.y + pa.h), cy = w2sy(pa.x + pa.w, pa.y + pa.h);
+const dx = w2sx(pa.x, pa.y + pa.h), dy = w2sy(pa.x, pa.y + pa.h);
+g.strokeStyle = 'rgba(217,164,65,0.35)';
+g.setLineDash([7, 6]); g.lineDashOffset = -R.time * 8;
+g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cx, cy); g.lineTo(dx, dy); g.closePath(); g.stroke();
+g.setLineDash([]);
 }
-/** Marcador sobre la granja del vecino que te encargó la tarea. */
+}
 function drawHelpMarker(g) {
-  const h = CR.Sys ? CR.Sys.help : null;
-  const p = E.player;
-  if (!h || !p) return;
-  let farm = null;
-  for (let i = 0; i < W.farms.length; i++) if (W.farms[i].owner === h.npcId) { farm = W.farms[i]; break; }
-  if (!farm) return;
-  const cx = farm.x + farm.w / 2, cy = farm.y + farm.h / 2;
-  if (U.dist2(p.t.x, p.t.y, cx, cy) > 2500) return;
-  const sx = w2sx(cx, cy), sy = w2sy(cx, cy) - 52 * R.zoom;
-  const done = h.done >= h.need;
-  const col = done ? '#3fbf6f' : '#f3cf7a';
-  const pulse = 0.7 + 0.3 * sin(R.time * 3);
-  g.save();
-  g.globalAlpha = pulse;
-  poly(g, [[sx, sy + 10 * R.zoom], [sx - 7 * R.zoom, sy], [sx + 7 * R.zoom, sy]], col, '#3a2a10', 1.2);
-  g.restore();
-  const txt = h.label + ' ' + h.done + '/' + h.need;
-  const lf = '700 ' + Math.max(9, 11 * R.zoom) + 'px system-ui, sans-serif';
-  g.font = lf; g.textAlign = 'center'; g.textBaseline = 'middle';
-  const tw = textW(g, lf, txt);
-  g.fillStyle = 'rgba(0,0,0,0.6)';
-  g.fillRect(sx - tw / 2 - 5, sy - 20 * R.zoom, tw + 10, 15 * R.zoom);
-  g.fillStyle = col; g.fillText(txt, sx, sy - 12.5 * R.zoom);
+const h = CR.Sys ? CR.Sys.help : null;
+const p = E.player;
+if (!h || !p) return;
+let farm = null;
+for (let i = 0; i < W.farms.length; i++) if (W.farms[i].owner === h.npcId) { farm = W.farms[i]; break; }
+if (!farm) return;
+const cx = farm.x + farm.w / 2, cy = farm.y + farm.h / 2;
+if (U.dist2(p.t.x, p.t.y, cx, cy) > 2500) return;
+const sx = w2sx(cx, cy), sy = w2sy(cx, cy) - 52 * R.zoom;
+const done = h.done >= h.need;
+const col = done ? '#3fbf6f' : '#f3cf7a';
+const pulse = 0.7 + 0.3 * sin(R.time * 3);
+g.save();
+g.globalAlpha = pulse;
+poly(g, [[sx, sy + 10 * R.zoom], [sx - 7 * R.zoom, sy], [sx + 7 * R.zoom, sy]], col, '#3a2a10', 1.2);
+g.restore();
+const txt = h.label + ' ' + h.done + '/' + h.need;
+const lf = '700 ' + Math.max(9, 11 * R.zoom) + 'px system-ui, sans-serif';
+g.font = lf; g.textAlign = 'center'; g.textBaseline = 'middle';
+const tw = textW(g, lf, txt);
+g.fillStyle = 'rgba(0,0,0,0.6)';
+g.fillRect(sx - tw / 2 - 5, sy - 20 * R.zoom, tw + 10, 15 * R.zoom);
+g.fillStyle = col; g.fillText(txt, sx, sy - 12.5 * R.zoom);
 }
-
 /* ==========================================================
 15 · DRAW PRINCIPAL
 ========================================================== */
 R.draw = function (alpha, dtMs) {
-  if (!R.ctx || R._lost) return;
-  const dt = U.clamp(dtMs / 1000, 0, 0.1);
-  R.time += dt;
-  const g = R.ctx;
-  g.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
-  g.imageSmoothingEnabled = true;
-  if (!W.ready) { drawTitleBackdrop(g, dt); return; }
-
-  updateCamera(dt);
-  updateParts(dt);
-  drawAmbientMotes();
-  g.fillStyle = '#0a0d08';
-  g.fillRect(0, 0, R.vw, R.vh);
-
-  /* Rango visible en coordenadas de mundo */
-  const c1 = Cam.screenToWorld(-40, -60), c2 = Cam.screenToWorld(R.vw + 40, -60);
-  const c3 = Cam.screenToWorld(-40, R.vh + 80), c4 = Cam.screenToWorld(R.vw + 40, R.vh + 80);
-  const x0 = U.clamp(Math.floor(Math.min(c1.x, c2.x, c3.x, c4.x)) - 1, 0, C.WORLD - 1);
-  const x1 = U.clamp(Math.ceil(Math.max(c1.x, c2.x, c3.x, c4.x)) + 1, 0, C.WORLD - 1);
-  const y0 = U.clamp(Math.floor(Math.min(c1.y, c2.y, c3.y, c4.y)) - 1, 0, C.WORLD - 1);
-  const y1 = U.clamp(Math.ceil(Math.max(c1.y, c2.y, c3.y, c4.y)) + 1, 0, C.WORLD - 1);
-
-  /* Terreno: solo los chunks realmente visibles, más uno de precarga */
-  const cx0 = Math.floor(x0 / CH), cx1 = Math.floor(x1 / CH);
-  const cy0 = Math.floor(y0 / CH), cy1 = Math.floor(y1 / CH);
-  const cw = CW * R.zoom, chh = CHT * R.zoom, mgX = cw * 0.6, mgY = chh * 0.6;
-  visBuf.length = 0;
-  let pfx = -1, pfy = -1;
-  for (let cy = cy0 - 1; cy <= cy1 + 1; cy++) {
-    for (let cx = cx0 - 1; cx <= cx1 + 1; cx++) {
-      if (cx < 0 || cy < 0 || cx * CH >= C.WORLD || cy * CH >= C.WORLD) continue;
-      const gx = (cx * CH - cy * CH) * HW, gy = (cx * CH + cy * CH) * HH;
-      const sx = (gx - camSX()) * R.zoom + R.vw / 2 + R.shakeX - COX * R.zoom;
-      const sy = (gy - camSY()) * R.zoom + R.vh / 2 + R.shakeY;
-      if (sx > R.vw || sy > R.vh || sx + cw < 0 || sy + chh < 0) {
-        if (pfx < 0 && sx < R.vw + mgX && sy < R.vh + mgY &&
-            sx + cw > -mgX && sy + chh > -mgY && !chunkCache.has(cy * CKEY + cx)) { pfx = cx; pfy = cy; }
-        continue;
-      }
-      visBuf.push(cx, cy, sx, sy);
-    }
-  }
-  CHUNK_MAX = Math.max(CHUNK_BASE, visBuf.length / 4 + 8);
-  for (let i = 0; i < visBuf.length; i += 4) {
-    g.drawImage(getChunk(visBuf[i], visBuf[i + 1]), visBuf[i + 2], visBuf[i + 3], cw, chh);
-  }
-  if (pfx >= 0 && chunkCache.size < CHUNK_MAX - 1) getChunk(pfx, pfy);
-
-  drawWater(g, x0, y0, x1, y1);
-  drawZones(g);
-  drawCamps(g);
-  drawParcelOverlay(g);
-  drawHazards(g);
-  const list = collect(x0, y0, x1, y1);
-  drawDrawables(g, list, alpha);
-  drawAim(g, alpha);
-  drawInteractHint(g);
-  drawHelpMarker(g);
-  drawParts(g);
-  drawFishing(g);
-  collectLights(x0, y0, x1, y1);
-  drawLighting(g);
-  drawRain(g, dt);
-  drawFloats(g);
-
-  /* Atmósfera por bioma hostil y aviso de guardia rota */
-  const p = E.player;
-  if (p) {
-    const bi = W.biomeAt(Math.floor(p.t.x), Math.floor(p.t.y));
-    if (bi === 7 || bi === 2 || bi === 8 || bi === 11) {
-      const gr = g.createRadialGradient(R.vw / 2, R.vh / 2, Math.min(R.vw, R.vh) * 0.3,
-        R.vw / 2, R.vh / 2, Math.max(R.vw, R.vh) * 0.72);
-      gr.addColorStop(0, 'rgba(0,0,0,0)');
-      gr.addColorStop(1, bi === 7 ? 'rgba(90,40,120,0.34)'
-        : bi === 8 ? 'rgba(140,50,20,0.30)'
-        : bi === 11 ? 'rgba(20,50,40,0.32)' : 'rgba(40,70,40,0.30)');
-      g.fillStyle = gr; g.fillRect(0, 0, R.vw, R.vh);
-    }
-    if (p.cb.guard > 0) {
-      g.fillStyle = 'rgba(224,75,58,' + (0.12 * U.clamp(p.cb.guard, 0, 1)) + ')';
-      g.fillRect(0, 0, R.vw, R.vh);
-    }
-  }
-
-  /* Hint de interacción a 10 Hz, saneado de emojis */
-  R._hintT -= dt;
-  if (R._hintT <= 0) {
-    R._hintT = 0.1;
-    let it = null;
-    try { it = E.findInteract(); } catch (e) { it = null; }
-    const lbl = it ? clean(it.label) : null;
-    const prev = R.interact ? R.interact.label : null;
-    R.interact = it ? { kind: it.kind, target: it.target, label: lbl } : null;
-    if (lbl !== prev) Bus.emit('hint', it ? { label: lbl, kind: it.kind } : null);
-  }
-  R._miniT -= dt;
-  if (R._miniT <= 0) { R._miniT = 0.2; drawMinimap(); }
-
-  /* Calidad y resolución adaptativas con histéresis */
-  R._fpsAcc += dt; R._fpsN++;
-  if (R._fpsAcc >= 1.5) {
-    const fps = R._fpsN / R._fpsAcc;
-    if (fps < 42 && R.quality > 0.45) R.quality = Math.max(0.45, R.quality - 0.15);
-    else if (fps > 57 && R.quality < 1) R.quality = Math.min(1, R.quality + 0.1);
-    if (fps < 34 && R.quality <= 0.5 && R._rs > 0.6) {
-      R._rs = Math.max(0.6, R._rs - 0.15); R._rsUp = 0; applyRenderScale();
-    } else if (fps > 58 && R.quality >= 1 && R._rs < 1) {
-      if (++R._rsUp >= 8) { R._rs = Math.min(1, R._rs + 0.1); R._rsUp = 0; applyRenderScale(); }
-    } else R._rsUp = 0;
-    R._fpsAcc = 0; R._fpsN = 0;
-  }
+if (!R.ctx || R._lost) return;
+const dt = U.clamp(dtMs / 1000, 0, 0.1);
+R.time += dt;
+const g = R.ctx;
+g.setTransform(R.dpr, 0, 0, R.dpr, 0, 0);
+g.imageSmoothingEnabled = true;
+if (!W.ready) { drawTitleBackdrop(g, dt); return; }
+updateCamera(dt);
+updateParts(dt);
+drawAmbientMotes();
+g.fillStyle = '#0a0d08';
+g.fillRect(0, 0, R.vw, R.vh);
+const c1 = Cam.screenToWorld(-40, -60), c2 = Cam.screenToWorld(R.vw + 40, -60);
+const c3 = Cam.screenToWorld(-40, R.vh + 80), c4 = Cam.screenToWorld(R.vw + 40, R.vh + 80);
+const x0 = U.clamp(Math.floor(Math.min(c1.x, c2.x, c3.x, c4.x)) - 1, 0, C.WORLD - 1);
+const x1 = U.clamp(Math.ceil(Math.max(c1.x, c2.x, c3.x, c4.x)) + 1, 0, C.WORLD - 1);
+const y0 = U.clamp(Math.floor(Math.min(c1.y, c2.y, c3.y, c4.y)) - 1, 0, C.WORLD - 1);
+const y1 = U.clamp(Math.ceil(Math.max(c1.y, c2.y, c3.y, c4.y)) + 1, 0, C.WORLD - 1);
+const cx0 = Math.floor(x0 / CH), cx1 = Math.floor(x1 / CH);
+const cy0 = Math.floor(y0 / CH), cy1 = Math.floor(y1 / CH);
+const cw = CW * R.zoom, chh = CHT * R.zoom, mgX = cw * 0.6, mgY = chh * 0.6;
+visBuf.length = 0;
+let pfx = -1, pfy = -1;
+for (let cy = cy0 - 1; cy <= cy1 + 1; cy++) {
+for (let cx = cx0 - 1; cx <= cx1 + 1; cx++) {
+if (cx < 0 || cy < 0 || cx * CH >= C.WORLD || cy * CH >= C.WORLD) continue;
+const gx = (cx * CH - cy * CH) * HW, gy = (cx * CH + cy * CH) * HH;
+const sx = (gx - camSX()) * R.zoom + R.vw / 2 + R.shakeX - COX * R.zoom;
+const sy = (gy - camSY()) * R.zoom + R.vh / 2 + R.shakeY;
+if (sx > R.vw || sy > R.vh || sx + cw < 0 || sy + chh < 0) {
+if (pfx < 0 && sx < R.vw + mgX && sy < R.vh + mgY &&
+sx + cw > -mgX && sy + chh > -mgY && !chunkCache.has(cy * CKEY + cx)) { pfx = cx; pfy = cy; }
+continue;
+}
+visBuf.push(cx, cy, sx, sy);
+}
+}
+CHUNK_MAX = Math.max(CHUNK_BASE, visBuf.length / 4 + 8);
+for (let i = 0; i < visBuf.length; i += 4) {
+g.drawImage(getChunk(visBuf[i], visBuf[i + 1]), visBuf[i + 2], visBuf[i + 3], cw, chh);
+}
+if (pfx >= 0 && chunkCache.size < CHUNK_MAX - 1) getChunk(pfx, pfy);
+drawWater(g, x0, y0, x1, y1);
+drawZones(g);
+drawCamps(g);
+drawParcelOverlay(g);
+drawHazards(g);
+const list = collect(x0, y0, x1, y1);
+drawDrawables(g, list, alpha);
+drawAim(g, alpha);
+drawInteractHint(g);
+drawHelpMarker(g);
+drawParts(g);
+drawFishing(g);
+collectLights(x0, y0, x1, y1);
+drawLighting(g);
+drawRain(g, dt);
+drawFloats(g);
+const p = E.player;
+if (p) {
+const bi = W.biomeAt(Math.floor(p.t.x), Math.floor(p.t.y));
+if (bi === 7 || bi === 2 || bi === 8 || bi === 11) {
+const gr = g.createRadialGradient(R.vw / 2, R.vh / 2, Math.min(R.vw, R.vh) * 0.3,
+R.vw / 2, R.vh / 2, Math.max(R.vw, R.vh) * 0.72);
+gr.addColorStop(0, 'rgba(0,0,0,0)');
+gr.addColorStop(1, bi === 7 ? 'rgba(90,40,120,0.34)'
+: bi === 8 ? 'rgba(140,50,20,0.30)'
+: bi === 11 ? 'rgba(20,50,40,0.32)' : 'rgba(40,70,40,0.30)');
+g.fillStyle = gr; g.fillRect(0, 0, R.vw, R.vh);
+}
+if (p.cb.guard > 0) {
+g.fillStyle = 'rgba(224,75,58,' + (0.12 * U.clamp(p.cb.guard, 0, 1)) + ')';
+g.fillRect(0, 0, R.vw, R.vh);
+}
+}
+R._hintT -= dt;
+if (R._hintT <= 0) {
+R._hintT = 0.1;
+let it = null;
+try { it = E.findInteract(); } catch (e) { it = null; }
+const lbl = it ? clean(it.label) : null;
+const prev = R.interact ? R.interact.label : null;
+R.interact = it ? { kind: it.kind, target: it.target, label: lbl } : null;
+if (lbl !== prev) Bus.emit('hint', it ? { label: lbl, kind: it.kind } : null);
+}
+R._miniT -= dt;
+if (R._miniT <= 0) { R._miniT = 0.2; drawMinimap(); }
+R._fpsAcc += dt; R._fpsN++;
+if (R._fpsAcc >= 1.5) {
+const fps = R._fpsN / R._fpsAcc;
+if (fps < 42 && R.quality > 0.45) R.quality = Math.max(0.45, R.quality - 0.15);
+else if (fps > 57 && R.quality < 1) R.quality = Math.min(1, R.quality + 0.1);
+if (fps < 34 && R.quality <= 0.5 && R._rs > 0.6) {
+R._rs = Math.max(0.6, R._rs - 0.15); R._rsUp = 0; applyRenderScale();
+} else if (fps > 58 && R.quality >= 1 && R._rs < 1) {
+if (++R._rsUp >= 8) { R._rs = Math.min(1, R._rs + 0.1); R._rsUp = 0; applyRenderScale(); }
+} else R._rsUp = 0;
+R._fpsAcc = 0; R._fpsN = 0;
+}
 };
-
 /* ==========================================================
 16 · INIT / RESIZE / CICLO DE VIDA
 ========================================================== */
 function applyRenderScale() {
-  if (!R.canvas || !R.vw) return;
-  R.dpr = U.clamp((window.devicePixelRatio || 1) * R._rs, 0.6, C.DPR_MAX);
-  R.canvas.width = Math.round(R.vw * R.dpr);
-  R.canvas.height = Math.round(R.vh * R.dpr);
-  if (R.ctx) R.ctx.imageSmoothingEnabled = true;
+if (!R.canvas || !R.vw) return;
+R.dpr = U.clamp((window.devicePixelRatio || 1) * R._rs, 0.6, C.DPR_MAX);
+R.canvas.width = Math.round(R.vw * R.dpr);
+R.canvas.height = Math.round(R.vh * R.dpr);
+if (R.ctx) R.ctx.imageSmoothingEnabled = true;
 }
 R.resize = function () {
-  if (!R.canvas) return;
-  const rect = R.canvas.getBoundingClientRect();
-  const w = Math.max(1, Math.round(rect.width || window.innerWidth));
-  const h = Math.max(1, Math.round(rect.height || window.innerHeight));
-  R.vw = w; R.vh = h;
-  applyRenderScale();
-  const small = w < 900 || h < 480;
-  CHUNK_BASE = small ? 14 : 22; CHUNK_MAX = CHUNK_BASE;
-  R.zoom = U.clamp(small ? 0.88 : 1, 0.6, 1.8);
-  if (!lightCv) { lightCv = document.createElement('canvas'); lightCtx = lightCv.getContext('2d'); }
-  lightCv.width = Math.max(1, Math.round(w / 2));
-  lightCv.height = Math.max(1, Math.round(h / 2));
-  while (chunkLRU.length > CHUNK_MAX) {
-    const old = chunkLRU.shift();
-    const oc = chunkCache.get(old);
-    if (oc) { oc.width = oc.height = 1; chunkCache.delete(old); }
-  }
-  if (R.mini) {
-    const mr = R.mini.getBoundingClientRect();
-    const mw = Math.max(64, Math.round(mr.width || 116));
-    R.mini.width = mw; R.mini.height = mw;
-    R.mctx = R.mini.getContext('2d');
-    R.mctx.imageSmoothingEnabled = false;
-  }
+if (!R.canvas) return;
+const rect = R.canvas.getBoundingClientRect();
+const w = Math.max(1, Math.round(rect.width || window.innerWidth));
+const h = Math.max(1, Math.round(rect.height || window.innerHeight));
+R.vw = w; R.vh = h;
+applyRenderScale();
+const small = w < 900 || h < 480;
+CHUNK_BASE = small ? 14 : 22; CHUNK_MAX = CHUNK_BASE;
+R.zoom = U.clamp(small ? 0.88 : 1, 0.6, 1.8);
+if (!lightCv) { lightCv = document.createElement('canvas'); lightCtx = lightCv.getContext('2d'); }
+lightCv.width = Math.max(1, Math.round(w / 2));
+lightCv.height = Math.max(1, Math.round(h / 2));
+while (chunkLRU.length > CHUNK_MAX) {
+const old = chunkLRU.shift();
+const oc = chunkCache.get(old);
+if (oc) { oc.width = oc.height = 1; chunkCache.delete(old); }
+}
+if (R.mini) {
+const mr = R.mini.getBoundingClientRect();
+const mw = Math.max(64, Math.round(mr.width || 116));
+R.mini.width = mw; R.mini.height = mw;
+R.mctx = R.mini.getContext('2d');
+R.mctx.imageSmoothingEnabled = false;
+}
 };
 R.init = function (canvas, minimap) {
-  if (!canvas) { CR.reportError(new Error('Render.init sin canvas'), 'render'); return; }
-  R.canvas = canvas;
-  R.ctx = canvas.getContext('2d', { alpha: false });
-  R.mini = minimap || null;
-  R.mctx = minimap ? minimap.getContext('2d') : null;
-  buildAtlas();
-  R.resize();
-  R.ready = true;
-  let rt = 0;
-  CR.Bindings.add(window, 'resize', function () {
-    clearTimeout(rt); rt = setTimeout(function () { R.resize(); }, 140);
-  }, false, 'render');
-  CR.Bindings.add(window, 'orientationchange', function () {
-    clearTimeout(rt); rt = setTimeout(function () { R.resize(); }, 260);
-  }, false, 'render');
-  CR.Bindings.add(canvas, 'contextlost', function (e) {
-    if (e.preventDefault) e.preventDefault(); R._lost = true;
-  }, false, 'render');
-  CR.Bindings.add(canvas, 'webglcontextlost', function (e) {
-    e.preventDefault(); R._lost = true;
-  }, false, 'render');
-  CR.Bindings.add(canvas, 'contextrestored', function () {
-    R._lost = false; R.invalidateAll(); R.resize();
-  }, false, 'render');
-  CR.Bindings.add(canvas, 'wheel', function (e) {
-    if (!CR.Input.enabled) return;
-    e.preventDefault();
-    Cam.setZoom(R.zoom * (e.deltaY > 0 ? 0.92 : 1.08));
-  }, { passive: false }, 'render');
-
-  Bus.on('fx', onFx, 'render');
-  Bus.on('floater', function (d) {
-    if (!d) return;
-    const f = floatPool.acquire();
-    if (!f) return;
-    let txt = String(d.text == null ? '' : d.text);
-    /* Las estrellas de calidad se convierten en texto legible, sin glifos */
-    const stars = (txt.match(/★/g) || []).length;
-    txt = clean(txt);
-    if (stars) txt += (txt ? ' · ' : '') + 'calidad ' + stars;
-    if (!txt) { floatPool.release(f); return; }
-    f.x = d.x; f.y = d.y; f.t = 0; f.max = 1.15; f.text = txt; f.col = d.color || '#fff';
-    floats.push(f);
-  }, 'render');
-  Bus.on('shake', function (d) {
-    if (!CR.Settings.values.shake || !d) return;
-    R.shake = Math.min(22, R.shake + (d.amt || 0));
-  }, 'render');
-  Bus.on('loaded', function () { R.invalidateAll(); }, 'render');
-  Bus.on('day', function () { R._mapDirty = true; }, 'render');
-  Bus.on('built', function () { R._mapDirty = true; }, 'render');
-  Bus.on('panel:close', function () { R._mapDirty = true; }, 'render');
-  Bus.on('settings', function (k) {
-    if (k === 'shake' && !CR.Settings.values.shake) { R.shake = 0; R.shakeX = R.shakeY = 0; }
-    if (k === 'showZones') R._mapDirty = true;
-  }, 'render');
-
-  console.info('[CR] render.js v3 listo · ' + C.WORLD + '² · atlas ' +
-    Object.keys(atlas.nodes).length + ' nodos / ' + Object.keys(atlas.crops).length + ' cultivos · arte ' +
-    (Art ? 'CR.Art v' + Art.version : 'fallback') + ' · chunks LRU ' + CHUNK_MAX);
+if (!canvas) { CR.reportError(new Error('Render.init sin canvas'), 'render'); return; }
+R.canvas = canvas;
+R.ctx = canvas.getContext('2d', { alpha: false });
+R.mini = minimap || null;
+R.mctx = minimap ? minimap.getContext('2d') : null;
+buildAtlas();
+R.resize();
+R.ready = true;
+let rt = 0;
+CR.Bindings.add(window, 'resize', function () {
+clearTimeout(rt); rt = setTimeout(function () { R.resize(); }, 140);
+}, false, 'render');
+CR.Bindings.add(window, 'orientationchange', function () {
+clearTimeout(rt); rt = setTimeout(function () { R.resize(); }, 260);
+}, false, 'render');
+CR.Bindings.add(canvas, 'contextlost', function (e) {
+if (e.preventDefault) e.preventDefault(); R._lost = true;
+}, false, 'render');
+CR.Bindings.add(canvas, 'webglcontextlost', function (e) {
+e.preventDefault(); R._lost = true;
+}, false, 'render');
+CR.Bindings.add(canvas, 'contextrestored', function () {
+R._lost = false; R.invalidateAll(); R.resize();
+}, false, 'render');
+CR.Bindings.add(canvas, 'wheel', function (e) {
+if (!CR.Input.enabled) return;
+e.preventDefault();
+Cam.setZoom(R.zoom * (e.deltaY > 0 ? 0.92 : 1.08));
+}, { passive: false }, 'render');
+Bus.on('fx', onFx, 'render');
+Bus.on('floater', function (d) {
+if (!d) return;
+const f = floatPool.acquire();
+if (!f) return;
+let txt = String(d.text == null ? '' : d.text);
+const stars = (txt.match(/★/g) || []).length;
+txt = clean(txt);
+if (stars) txt += (txt ? ' · ' : '') + 'calidad ' + stars;
+if (!txt) { floatPool.release(f); return; }
+f.x = d.x; f.y = d.y; f.t = 0; f.max = 1.15; f.text = txt; f.col = d.color || '#fff';
+floats.push(f);
+}, 'render');
+Bus.on('shake', function (d) {
+if (!CR.Settings.values.shake || !d) return;
+R.shake = Math.min(22, R.shake + (d.amt || 0));
+}, 'render');
+Bus.on('loaded', function () { R.invalidateAll(); }, 'render');
+Bus.on('day', function () { R._mapDirty = true; }, 'render');
+Bus.on('built', function () { R._mapDirty = true; }, 'render');
+Bus.on('panel:close', function () { R._mapDirty = true; }, 'render');
+Bus.on('settings', function (k) {
+if (k === 'shake' && !CR.Settings.values.shake) { R.shake = 0; R.shakeX = R.shakeY = 0; }
+if (k === 'showZones') R._mapDirty = true;
+}, 'render');
+console.info('[CR] render.js v5 listo · ' + C.WORLD + '² · atlas ' +
+Object.keys(atlas.nodes).length + ' nodos / ' + Object.keys(atlas.crops).length + ' cultivos · arte ' +
+(Art ? 'CR.Art v' + Art.version : 'fallback') + ' · chunks LRU ' + CHUNK_MAX +
+' · pesca silenciosa · barra de doma con método');
 };
 R.dispose = function () {
-  CR.Bindings.removeOwner('render');
-  R.invalidateAll();
-  for (let i = 0; i < parts.length; i++) partPool.release(parts[i]);
-  parts.length = 0;
-  for (let i = 0; i < floats.length; i++) floatPool.release(floats[i]);
-  floats.length = 0;
-  R.ready = false;
+CR.Bindings.removeOwner('render');
+R.invalidateAll();
+for (let i = 0; i < parts.length; i++) partPool.release(parts[i]);
+parts.length = 0;
+for (let i = 0; i < floats.length; i++) floatPool.release(floats[i]);
+floats.length = 0;
+R.ready = false;
 };
 R.stats = function () {
-  return {
-    chunks: chunkCache.size, parts: parts.length, floats: floats.length,
-    zoom: R.zoom, quality: R.quality, rs: R._rs
-  };
+return {
+chunks: chunkCache.size, parts: parts.length, floats: floats.length,
+zoom: R.zoom, quality: R.quality, rs: R._rs
+};
 };
 })();

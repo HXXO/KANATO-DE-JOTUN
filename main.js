@@ -1,14 +1,13 @@
 /* ============================================================
-KANATO DE JOTUN · main.js — Bootstrap v4
-Máquina de estados (título → creación → INTRO → juego → pausa →
+KANATO DE JOTUN · main.js — Bootstrap v5
+Máquina de estados (título → creación → intro → juego → pausa →
 KO → error), bucle único, capa de compatibilidad, autoguardado,
-auto-pausa por foco, overlay de pánico con exportación y panel F3.
+auto-pausa por foco, overlay de pánico con exportación y panel
+de rendimiento F3. Cierra la arquitectura de 14 módulos.
 
-CAMBIOS v4:
-· INTRO (mejora 5): tras generar el mundo y crear al jugador se
-  muestra screen-intro con la historia; un clic (o Enter) entra.
-· Kit inicial (mejora 6): ya no se regala petate ni se tocan las
-  ranuras rápidas; entities v4 entrega SOLO pico y hacha de piedra.
+CAMBIOS v5:
+· Intro narrativa breve antes de entrar al mundo.
+· Arranque con un solo aviso, sin ráfaga de toasts.
 ============================================================ */
 (function () {
 'use strict';
@@ -24,10 +23,10 @@ CAPA DE COMPATIBILIDAD · correcciones defensivas idempotentes
 function compat() {
   if (W.__crCompat) return;
   W.__crCompat = true;
-  /* 1 · El token de generación sobrevive al reset interno. */
+  /* El token de generación debe sobrevivir al reset interno. */
   const origReset = W.reset;
   W.reset = function () { const t = W._genToken; origReset.call(W); W._genToken = t; };
-  /* 2 · Edificios sin funciones no rompen la interacción. */
+  /* Edificios sin funciones no deben romper la interacción. */
   const origBI = S.buildingInteract;
   if (typeof origBI === 'function') {
     S.buildingInteract = function (b) {
@@ -36,7 +35,7 @@ function compat() {
       catch (e) { CR.reportError(e, 'buildingInteract'); }
     };
   }
-  /* 3 · Al despertar de un KO, limpia canales de entrada pegados. */
+  /* Al despertar de un KO, limpia cualquier canal de entrada pegado. */
   Bus.on('ko:hide', function () { CR.Input.clearAll(); }, 'main-compat');
 }
 
@@ -65,6 +64,64 @@ function placeSlaveCamp() {
 }
 
 /* ==========================================================
+INTRO NARRATIVA v5
+========================================================== */
+const INTRO_CARDS = [
+  { t: 'El naufragio', b: 'La tormenta partió tu barco como si fuera leña. Despertaste en una playa de arena gris, con el collar de esclavo ya puesto y las manos vacías.' },
+  { t: 'Vhalor', b: 'Los cazadores de Bareth te arrastraron hasta la ciudad amurallada. Dos puertas. Un mercado. Una deuda de dos mil monedas de oro que no pediste.' },
+  { t: 'La ley', b: '«Paga y serás libre», dijo Bareth. «Roba, y la guardia hará el resto». En Vhalor nadie regala nada… pero todo se puede ganar.' },
+  { t: 'Tu historia', b: 'Pica piedra. Tala madera. Domestica bestias. Gánate la confianza de quienes mandan. Y un día, quizá, el valle sea tuyo.' }
+];
+let introIdx = 0, introPending = null;
+
+function showIntroCard() {
+  const box = el('intro-card');
+  const ti = el('intro-title');
+  const tx = el('intro-text');
+  const ct = el('intro-count');
+  if (!box) { finishIntro(); return; }
+  const card = INTRO_CARDS[introIdx];
+  if (!card) { finishIntro(); return; }
+  if (ti) ti.textContent = card.t;
+  if (tx) tx.textContent = card.b;
+  if (ct) ct.textContent = (introIdx + 1) + ' / ' + INTRO_CARDS.length;
+  const btn = el('intro-next');
+  if (btn) btn.innerHTML = (introIdx >= INTRO_CARDS.length - 1
+    ? (A.imgHtml ? '' : '') + '<span>Comenzar</span>'
+    : '<span>Continuar</span>');
+  box.classList.remove('hidden');
+}
+function advanceIntro() {
+  A.play('click');
+  introIdx++;
+  if (introIdx >= INTRO_CARDS.length) finishIntro();
+  else showIntroCard();
+}
+function resetIntro() {
+  introIdx = 0; introPending = null;
+  const box = el('intro-card');
+  if (box) box.classList.remove('hidden');
+}
+function finishIntro() {
+  introIdx = 0;
+  if (!introPending) return;
+  const fn = introPending; introPending = null;
+  try { fn(); } catch (e) { CR.reportError(e, 'intro'); enterPlaying(); }
+}
+function maybeIntro(thenFn) {
+  /* La intro solo se usa en partida nueva. Sin tarjetas, entra directo. */
+  if (!el('intro-card') || !INTRO_CARDS.length) { thenFn(); return; }
+  introPending = thenFn;
+  introIdx = 0;
+  Game.state = 'intro';
+  CR.Loop.simEnabled = false;
+  CR.Input.enabled = false;
+  CR.Input.clearAll();
+  UI.showScreen('screen-intro');
+  showIntroCard();
+}
+
+/* ==========================================================
 ESTADOS
 ========================================================== */
 function syncSimOnly() {
@@ -84,26 +141,8 @@ function enterPlaying() {
   A.resume();
   syncSim();
 }
-/* --- v4: INTRO (mejora 5) --- */
-function showIntro() {
-  Game.state = 'intro';
-  CR.Loop.simEnabled = false;
-  CR.Input.enabled = false;
-  CR.Input.clearAll();
-  el('hud').hidden = true;
-  UI.showScreen('screen-intro');
-  A.resume();
-}
-function enterFromIntro() {
-  if (Game.state !== 'intro') return;
-  UI.hideScreens();
-  enterPlaying();
-  UI.banner('ESCLAVO DE VHALOR', 'Deuda: 2.000 oro. Pica, tala, vende… y rompe tu cadena.');
-  UI.toast('En la plaza hay HORNO y MESA PÚBLICOS: fabrica sin construir nada (lentos, sin calidad).', 'gold');
-  UI.toast('Si una herramienta se rompe NO la tires: repárala barata desde el inventario (I).', '');
-  UI.toast('Cada nivel da 1 punto de habilidad (H) y 1 punto de receta (J): elige saberes.', '');
-}
 function toTitle() {
+  resetIntro();
   Game.state = 'title';
   CR.Loop.simEnabled = false;
   CR.Input.enabled = false;
@@ -149,8 +188,11 @@ function startNew(name, gender, seedStr) {
     if (!ok) { UI.showError('No se pudo generar el mundo. Recarga la página.'); return; }
     UI.setLoad(0.96, 'Poblando Vhalor…');
     S.newGame(name, gender, seed);
-    /* entities v4 ya entrega SOLO pico y hacha de piedra (mejora 6). */
     const p = E.createPlayer(name, gender);
+    /* Carga inicial: herramientas en la barra rápida y un petate. */
+    p.quick[2] = 'axe_stone';
+    p.quick[3] = 'pick_stone';
+    E.Inv.add(p, 'bed_roll', 1);
     E.spawnNPCs();
     placeSlaveCamp();
     E.spawnBosses();
@@ -159,11 +201,17 @@ function startNew(name, gender, seedStr) {
     W.Hash.rebuild(E.list);
     R.invalidateAll();
     UI.setLoad(1, 'Listo.');
-    showIntro();               /* v4: la historia antes de entrar */
-    S.save(true);
+    /* v5: intro narrativa antes de entrar; un solo aviso al pisar el mundo. */
+    maybeIntro(function () {
+      enterPlaying();
+      UI.banner('ESCLAVO DE VHALOR', 'Deuda: 2.000 oro. Pica, tala y vende para romper tu cadena.');
+      S.save(true);
+    });
   }).catch(function (e) { CR.reportError(e, 'startNew'); });
 }
 function loadGame() {
+  /* Continuar: la intro se omite siempre. */
+  resetIntro();
   UI.showScreen('screen-loading');
   UI.setLoad(0.05, 'Reconstruyendo el mundo desde la semilla…');
   let raw = null;
@@ -176,7 +224,7 @@ function loadGame() {
       return;
     }
     R.invalidateAll();
-    enterPlaying();            /* sin intro al cargar: ya conoces tu historia */
+    enterPlaying();
     UI.banner('PARTIDA RECUPERADA', E.player.name + ' · Día ' + CR.Time.day);
   }).catch(function (e) { CR.reportError(e, 'loadGame'); });
 }
@@ -203,7 +251,7 @@ function render(alpha, dtMs) {
         'FPS ' + st.fps + '  sim ' + st.simMs + 'ms  draw ' + st.renderMs + 'ms\n' +
         'entidades ' + E.list.length + '/' + E.CAP + '  nodos ' + W.nodes.size + '\n' +
         'chunks ' + rs.chunks + '  part ' + rs.parts + '  zoom ' + rs.zoom.toFixed(2) + '  q ' + rs.quality.toFixed(2) + '\n' +
-        'listeners ' + CR.Bindings.count() + '  voces audio ok\n' +
+        'listeners ' + CR.Bindings.count() + '\n' +
         (p ? 'pos ' + p.t.x.toFixed(1) + ',' + p.t.y.toFixed(1) + '  ' + W.biomeName(p.t.x | 0, p.t.y | 0) + '\n' : '') +
         'día ' + CR.Time.day + ' ' + CR.Time.hour + ':' + String(CR.Time.minute).padStart(2, '0') + '  calor ' + Math.round(E.heat) + '\n' +
         'semilla ' + W.seed;
@@ -236,15 +284,9 @@ function bind() {
     startNew(name, gender, (el('create-seed').value || '').trim());
   }, false, 'main');
   B.add(el('create-name'), 'keydown', function (e) { if (e.key === 'Enter') el('btn-create-start').click(); }, false, 'main');
-  /* INTRO (mejora 5): clic o Enter para entrar al mundo */
-  B.add(el('btn-intro-enter'), 'click', function () { A.play('quest'); enterFromIntro(); }, false, 'main');
-  B.add(el('screen-intro'), 'click', function (e) {
-    if (e.target.closest('.btn')) return;
-    A.play('quest'); enterFromIntro();
-  }, false, 'main');
-  B.add(window, 'keydown', function (e) {
-    if (Game.state === 'intro' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); enterFromIntro(); }
-  }, false, 'main');
+  /* Intro v5 */
+  B.add(el('intro-next'), 'click', advanceIntro, false, 'main');
+  B.add(el('intro-skip'), 'click', function () { A.play('click'); finishIntro(); }, false, 'main');
   /* Pausa */
   B.add(el('btn-resume'), 'click', function () { pause(false); }, false, 'main');
   B.add(el('btn-save'), 'click', function () { S.save(false); }, false, 'main');
@@ -265,8 +307,8 @@ function bind() {
   /* Bus de UI */
   Bus.on('ui:pause', function () { if (Game.state === 'playing') pause(true); else if (Game.state === 'paused') pause(false); }, 'main');
   Bus.on('ui:escape', function () {
+    if (Game.state === 'intro') { advanceIntro(); return; }
     if (UI._edit) { UI.exitCtlEdit(); syncSim(); return; }
-    if (Game.state === 'intro') { enterFromIntro(); return; }
     if (S.dialog) { S.closeDialog(); syncSim(); return; }
     if (S.panel) { S.closePanel(); syncSim(); return; }
     if (UI.local) { UI.closeModal(); syncSim(); return; }
@@ -337,7 +379,7 @@ function boot() {
       const bc = el('btn-continue');
       if (bc) bc.disabled = !S.hasSave();
     }, 420);
-    console.info('[CR] KANATO DE JOTUN v' + CR.version + ' listo · mundo ' + C.WORLD + '² · intro + tiers + saberes + talleres públicos · 60 Hz fijos.');
+    console.info('[CR] KANATO DE JOTUN v' + CR.version + ' listo · mundo ' + C.WORLD + '² · intro narrativa · 14 módulos · 60 Hz.');
   } catch (e) {
     CR.reportError(e, 'boot');
   }

@@ -1,18 +1,24 @@
 /* ============================================================
-KANATO DE JOTUN · art.js — Núcleo de arte procedural (v2)
+KANATO DE JOTUN · art.js — Núcleo de arte procedural v5
 · Helpers de forma/color con caché.
 · Art.drawBody  → criaturas (registro en art-creatures.js).
 · Art.drawPerson→ jugador/NPC/guardia/trabajador/bandido/esqueleto
-                  (registro en art-people.js, equipo visible).
+(registro en art-people.js, equipo visible).
 · Art.icon/url/html → iconos procedurales SIN emojis:
-    'sword_iron'   ítem (art-items.js)
-    'sp:wolf'      criatura en miniatura
-    'npc:dorn'     busto de persona
-    'bld:forge'    edificio
-    'node:tree'    nodo de recurso
-    'ui:coin'      glifo de interfaz
-    'crop:wheat'   atajo a crop_wheat
+'sword_iron'   ítem (art-items.js)
+'sp:wolf'      criatura en miniatura
+'npc:dorn'     busto de persona (retrato frontal v5)
+'bld:forge'    edificio
+'node:tree'    nodo de recurso
+'ui:coin'      glifo de interfaz
+'crop:wheat'   atajo a crop_wheat
 · Art.strip → elimina cualquier emoji de textos heredados.
+
+CAMBIOS v5:
+· npcIcon usa el nuevo encuadre de retrato: cabeza centrada en el
+marco, hombros en la base, sin el doble transform que aplastaba la
+cara contra el borde.
+· Los retratos se rasterizan a 2× para máxima nitidez en el panel.
 Depende solo de core.js + data.js. Se carga antes de render/ui.
 ============================================================ */
 (function () {
@@ -20,7 +26,6 @@ Depende solo de core.js + data.js. Se carga antes de render/ui.
 const CR = window.CR;
 if (!CR || !CR.DATA) { console.error('[CR] art.js requiere core.js y data.js'); return; }
 const U = CR.util, D = CR.DATA, TAU = U.TAU;
-
 const Art = CR.Art = {
   creatures: Object.create(null),
   people: Object.create(null),
@@ -29,7 +34,7 @@ const Art = CR.Art = {
   buildings: Object.create(null),
   nodes: Object.create(null),
   _icon: new Map(), _url: new Map(),
-  version: 2, ready: true
+  version: 5, ready: true
 };
 
 /* ---------------- Color ---------------- */
@@ -55,22 +60,22 @@ function mix(h1, h2, t) {
 }
 
 /* ---------------- Formas (espacio local: origen = suelo, +x = frente) ---------------- */
-function ell(g, x, y, rx, ry, fill, stroke, lw) {
+function ell(g, x, y, rx, ry, fill, strokeC, lw) {
   g.beginPath(); g.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), 0, 0, TAU);
   if (fill) { g.fillStyle = fill; g.fill(); }
-  if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw || 0.8; g.stroke(); }
+  if (strokeC) { g.strokeStyle = strokeC; g.lineWidth = lw || 0.8; g.stroke(); }
 }
-function path(g, pts, fill, stroke, lw) {
+function path(g, pts, fill, strokeC, lw) {
   if (!pts.length) return;
   g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
   g.closePath();
   if (fill) { g.fillStyle = fill; g.fill(); }
-  if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw || 0.8; g.lineJoin = 'round'; g.stroke(); }
+  if (strokeC) { g.strokeStyle = strokeC; g.lineWidth = lw || 0.8; g.lineJoin = 'round'; g.stroke(); }
 }
-function blob(g, x, y, rx, ry, col, hi, stroke) {
-  ell(g, x, y, rx, ry, col, stroke || shade(col, -0.42), 0.9);
-  if (hi !== null) {
+function blob(g, x, y, rx, ry, col, hi, strokeC) {
+  ell(g, x, y, rx, ry, col, strokeC || shade(col, -0.42), 0.9);
+  if (hi !== null && hi !== undefined) {
     g.save(); g.beginPath(); g.ellipse(x, y, rx, ry, 0, 0, TAU); g.clip();
     ell(g, x - rx * 0.24, y - ry * 0.40, rx * 0.74, ry * 0.52, hi || shade(col, 0.20));
     ell(g, x + rx * 0.30, y + ry * 0.52, rx * 0.70, ry * 0.42, shade(col, -0.20));
@@ -104,8 +109,8 @@ function fur(g, x0, y0, x1, y1, n, h, col, seed) {
   pts.push([x1, y1]);
   path(g, pts, col);
 }
-function eye(g, x, y, r, col, glow) {
-  if (glow) { g.save(); g.globalAlpha = 0.5; ell(g, x, y, r * 2.4, r * 2.4, glow); g.restore(); }
+function eye(g, x, y, r, col, glowC) {
+  if (glowC) { g.save(); g.globalAlpha = 0.5; ell(g, x, y, r * 2.4, r * 2.4, glowC); g.restore(); }
   ell(g, x, y, r, r, col);
   ell(g, x - r * 0.3, y - r * 0.3, r * 0.34, r * 0.34, 'rgba(255,255,255,0.85)');
 }
@@ -149,17 +154,16 @@ function glow(g, x, y, r, col, a) {
   gr.addColorStop(0, rgba(col, 0.9)); gr.addColorStop(1, rgba(col, 0));
   g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill(); g.restore();
 }
-
 Art.util = {
   rgb: rgb, shade: shade, rgba: rgba, mix: mix,
   ell: ell, path: path, blob: blob, leg: leg, stroke: stroke, curve: curve,
   fur: fur, eye: eye, horn: horn, spots: spots, rr: rr, lgrad: lgrad, glow: glow, TAU: TAU
 };
 
-/* ---------------- Eliminador de emojis (textos heredados de data/systems) ---------------- */
+/* ---------------- Eliminador de emojis (textos heredados) ---------------- */
 let _emojiRE = null;
 try {
-  _emojiRE = new RegExp('[\\u{1F000}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\u{2B00}-\\u{2BFF}\\u{2190}-\\u{21FF}\\u{2300}-\\u{23FF}\\u{FE0F}\\u{200D}\\u{20E3}\\u{1F1E6}-\\u{1F1FF}]', 'gu');
+  _emojiRE = new RegExp('[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{FE0F}\u{200D}\u{20E3}\u{1F1E6}-\u{1F1FF}]', 'gu');
 } catch (e) { _emojiRE = /[\u2600-\u27BF]/g; }
 Art.strip = function (s) {
   return String(s == null ? '' : s).replace(_emojiRE, '').replace(/\s{2,}/g, ' ').trim();
@@ -208,7 +212,7 @@ Art.drawPerson = function (g, e, sx, sy, s, walk, time) {
   if (!e) return false;
   let fn = null;
   if (e.type === 'player') fn = Art.people.player;
-  else if (e.type === 'npc') fn = Art.people[e.npcId];
+  else if (e.type === 'npc') fn = Art.people[e.npcId] || Art.people._default;
   else if (e.type === 'guard') fn = Art.people.guard;
   else if (e.type === 'worker') fn = Art.people.worker;
   else if (e.species === 'bandit') fn = Art.people.bandit;
@@ -263,12 +267,17 @@ function speciesIcon(g, id, size) {
   try { fn(g, o); } catch (e) { g.restore(); return false; }
   g.restore(); return true;
 }
+/* v5 · RETRATO FRONTAL: el busto de art-people dibuja la cabeza centrada
+   en (0,-16) y los hombros hasta y=0 dentro de un marco de ~30 unidades.
+   Encuadramos ese espacio exacto: nada de doble transform que deforme. */
 function npcIcon(g, id, size) {
-  const fn = Art.people[id === 'player' ? 'player' : id];
+  const fn = Art.people[id === 'player' ? 'player' : id] || Art.people._default;
   if (!fn) return false;
   const nd = D.NPCS[id];
   const k = size / 30;
-  g.save(); g.translate(size / 2, size * 0.94); g.scale(k, k);
+  g.save();
+  g.translate(size / 2, size * 0.96);
+  g.scale(k, k);
   const o = {
     t: 0.4, ph: 0.6, atk: -1, face: 1, sq: 1, e: null, bust: true,
     gender: nd ? nd.gender : 'm', free: true, equip: null, ride: false,
@@ -345,6 +354,5 @@ Art.glyph = function (id, fn) { Art.glyphs[id] = fn; };
 Art.building = function (id, fn) { Art.buildings[id] = fn; };
 Art.node = function (id, fn) { Art.nodes[id] = fn; };
 Art.clearCache = function () { Art._icon.clear(); Art._url.clear(); };
-
-console.info('[CR] art.js v2 listo · cuerpos + personas + iconos procedurales sin emojis');
+console.info('[CR] art.js v5 listo · retrato frontal nítido 2× · cuerpos + personas + iconos sin emojis');
 })();
